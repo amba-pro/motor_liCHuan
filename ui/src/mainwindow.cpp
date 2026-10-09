@@ -7,6 +7,7 @@
 #include <QCloseEvent>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
+#include <QFrame>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -17,6 +18,8 @@
 #include <QTabWidget>
 #include <QTimer>
 #include <QVBoxLayout>
+
+#include <utility>
 
 namespace {
 
@@ -79,7 +82,9 @@ void MainWindow::build() {
   banner->setWordWrap(true);
   root->addWidget(banner);
 
-  auto *statusRow = new QHBoxLayout;
+  auto *statusPanel = new QGridLayout;
+  statusPanel->setHorizontalSpacing(12);
+  statusPanel->setVerticalSpacing(10);
   ethercatState_ = readout("EtherCAT", "ethercatState");
   servoState_ = readout("Сервопривод", "servoState");
   positionValue_ = readout("Положение, град", "positionValue");
@@ -89,11 +94,19 @@ void MainWindow::build() {
   errorValue_ = readout("Код ошибки", "errorValue");
   wkcValue_ = readout("Рабочий счётчик", "wkcValue");
   cycleValue_ = readout("Цикл", "cycleValue");
+  int statusIndex = 0;
   for (QLabel *label : {ethercatState_, servoState_, positionValue_, velocityValue_, torqueValue_, followingValue_,
                         errorValue_, wkcValue_, cycleValue_}) {
-    statusRow->addWidget(label->parentWidget(), 1);
+    auto *card = new QFrame;
+    card->setObjectName("telemetryCard");
+    auto *cardLayout = new QVBoxLayout(card);
+    cardLayout->setContentsMargins(10, 8, 10, 8);
+    label->parentWidget()->setParent(card);
+    cardLayout->addWidget(label->parentWidget());
+    statusPanel->addWidget(card, statusIndex / 3, statusIndex % 3);
+    ++statusIndex;
   }
-  root->addLayout(statusRow);
+  root->addLayout(statusPanel);
 
   auto *estop = new QLabel(
       "Аварийный останов не подтверждён. Программный СТОП не заменяет аппаратную кнопку.", this);
@@ -137,6 +150,21 @@ void MainWindow::build() {
   connect(absoluteMode, &QRadioButton::toggled, this, [this](bool checked) { absoluteMode_ = checked; });
   form->addRow(relativeMode);
   form->addRow("Смещение, град", relativeSpin_);
+  auto *presets = new QWidget(formBox);
+  auto *presetLayout = new QHBoxLayout(presets);
+  presetLayout->setContentsMargins(0, 0, 0, 0);
+  presetLayout->setSpacing(6);
+  for (const auto &preset : {std::pair<const char *, double>{"−1°", -1.0},
+                             {"−0.1°", -0.1}, {"+0.1°", 0.1}, {"+1°", 1.0}}) {
+    auto *button = new QPushButton(QString::fromUtf8(preset.first), presets);
+    button->setObjectName(QString("preset_%1").arg(preset.second, 0, 'f', 1));
+    button->setToolTip("Только заполняет поле смещения; двигатель не запускается");
+    connect(button, &QPushButton::clicked, this, [this, value = preset.second] {
+      relativeSpin_->setValue(value);
+    });
+    presetLayout->addWidget(button);
+  }
+  form->addRow("Быстрый выбор", presets);
   form->addRow(absoluteMode);
   form->addRow("Абсолютная цель, град", absoluteSpin_);
   form->addRow("Скорость, об/мин", speedSpin_);

@@ -9,6 +9,7 @@ inline QString industrialStyle() {
       "QTabWidget::pane { border: 1px solid #2c3640; }"
       "QTabBar::tab { background: #1c242c; color: #b7c3ce; padding: 10px 18px; }"
       "QTabBar::tab:selected { background: #243038; color: #f4f7f8; border-bottom: 2px solid #3d9a78; }"
+      "QFrame#telemetryCard { background: #1a2229; border: 1px solid #31404a; border-radius: 6px; }"
       "QGroupBox { border: 1px solid #31404a; margin-top: 14px; border-radius: 6px; background: #1a2229; "
       "padding: 12px; }"
       "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; color: #9aabba; }"
