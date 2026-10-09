@@ -29,7 +29,7 @@ class TelemetryPublisher {
   TelemetryPublisher(const TelemetryPublisher &) = delete;
   TelemetryPublisher &operator=(const TelemetryPublisher &) = delete;
 
-  bool start(std::string &err);
+  bool start(std::string &err, const std::string &source = "lc_e_csp_hold");
   void publish(const TelemetryFrame &frame);
   void stop();
 
@@ -44,4 +44,5 @@ class TelemetryPublisher {
   std::thread thread_;
   int listen_fd_ = -1;
   int client_fd_ = -1;
+  std::string source_ = "lc_e_csp_hold";
 };

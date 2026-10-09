@@ -7,8 +7,9 @@ add_library(lc_motion STATIC
   src/motion_validator.cpp
   src/demo_plant.cpp
   src/live_telemetry.cpp
+  src/motion_client.cpp
 )
-target_include_directories(lc_motion PUBLIC src)
+target_include_directories(lc_motion PUBLIC src "${CMAKE_SOURCE_DIR}/src")
 target_link_libraries(lc_motion PUBLIC pthread Qt6::Network)
 
 add_library(lc_widgets STATIC

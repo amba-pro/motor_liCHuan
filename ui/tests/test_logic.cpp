@@ -2,6 +2,7 @@
 #include "motion_validator.hpp"
 #include "motion_readiness.hpp"
 #include "safety_gate.hpp"
+#include "shaft_angle.hpp"
 
 #include <QtTest>
 
@@ -19,6 +20,7 @@ class LogicTest : public QObject {
   void demoNeverLooksLikeTheDrive();
   void failedRealtimeAcceptanceBlocksMovement();
   void allReadinessEvidenceMustBePresent();
+  void fullRevolutionIsNotATravelCommand();
 };
 
 void LogicTest::safetyKeepsRealMotionClosed() {
@@ -110,6 +112,21 @@ void LogicTest::allReadinessEvidenceMustBePresent() {
   r.testedCycles = 30000;
   r.badWorkingCounters = 1;
   QVERIFY(!motionBlockers(r).empty());
+}
+
+void LogicTest::fullRevolutionIsNotATravelCommand() {
+  const TravelPlan full = plan_shaft_move(0, 180.0, TravelDirection::Shortest, 5, 20, 20);
+  QVERIFY(!full.commandable);
+  QVERIFY(full.block.find("1") != std::string::npos);
+  const TravelPlan clockwise = plan_shaft_move(0, 0.5, TravelDirection::Clockwise, 5, 20, 20);
+  QVERIFY(!clockwise.commandable);
+  QVERIFY(clockwise.block.find("часовой") != std::string::npos);
+  const TravelPlan small = plan_shaft_move(0, 0.5, TravelDirection::Shortest, 5, 20, 20);
+  QVERIFY(small.commandable);
+  QVERIFY(small.counts > 0);
+  QVERIFY(small.counts <= 23302);
+  const TravelPlan fast = plan_shaft_move(0, 0.5, TravelDirection::Shortest, 5.5, 20, 20);
+  QVERIFY(!fast.commandable);
 }
 
 QTEST_GUILESS_MAIN(LogicTest)

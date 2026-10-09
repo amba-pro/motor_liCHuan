@@ -2,6 +2,7 @@
 #include "mainwindow.hpp"
 
 #include <QApplication>
+#include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QDial>
 #include <QSlider>
@@ -128,7 +129,11 @@ void WindowTest::fullTurnSetpointsNeverStartMotor() {
   auto *dial = window.findChild<QDial *>("angle360Dial");
   auto *rpm = window.findChild<QSlider *>("targetRpmSlider");
   auto *label = window.findChild<QLabel *>("targetAnglePreview");
-  QVERIFY(angle && dial && rpm && label);
+  auto *direction = window.findChild<QComboBox *>("directionChoice");
+  auto *plan = window.findChild<QLabel *>("motionPlanLabel");
+  auto *stop = window.findChild<QPushButton *>("controlledStopButton");
+  QVERIFY(angle && dial && rpm && label && direction && plan && stop);
+  QVERIFY(plan->text().contains("заблокировано") || plan->text().contains("телеметр"));
   angle->setValue(270.0);
   QCOMPARE(dial->value(), 270);
   angle->setValue(359.99);
