@@ -39,7 +39,9 @@ class MainWindow : public QMainWindow {
   void showRealBlocked();
   void connectController();
   void requestEnable();
+  void requestFaultAck();
   void requestMove();
+  QString enableBlockerText() const;
   void requestStop();
   void requestDisable();
   void updateMotionPlan();
@@ -63,6 +65,7 @@ class MainWindow : public QMainWindow {
   double liveTime_ = 0.0;
 
   QLabel *liveState_ = nullptr;
+  QLabel *liveHealth_ = nullptr;
   QLabel *livePosition_ = nullptr;
   QLabel *liveVelocity_ = nullptr;
   QLabel *liveTorque_ = nullptr;
@@ -90,6 +93,7 @@ class MainWindow : public QMainWindow {
   QComboBox *directionChoice_ = nullptr;
   QLabel *motionPlan_ = nullptr;
   QLabel *commandState_ = nullptr;
+  QLabel *enableBlockers_ = nullptr;
   QProcess *service_ = nullptr;
   MotionClient *commands_ = nullptr;
   quint64 nextCommandId_ = 1;

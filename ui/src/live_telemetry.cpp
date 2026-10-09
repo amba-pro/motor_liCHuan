@@ -200,6 +200,24 @@ bool LiveTelemetry::parseLine(const QByteArray &line, LiveSnapshot &out) const {
     return false;
   }
   if (!o.value("op").isBool() || !o.value("enabled").isBool()) return false;
+  QString faultClass;
+  qint64 startupStatus = 0;
+  qint64 startupError = 0;
+  bool faultKnown = o.contains(QLatin1String("fault_class"));
+  if (faultKnown) {
+    faultClass = o.value(QLatin1String("fault_class")).toString();
+    if (faultClass != QLatin1String("none") && faultClass != QLatin1String("historical") &&
+        faultClass != QLatin1String("active") && faultClass != QLatin1String("acknowledge")) {
+      return false;
+    }
+    if (!o.value(QLatin1String("fault_blocks")).isBool() || !o.value(QLatin1String("deadline_clear")).isBool()) {
+      return false;
+    }
+    if (!integer(o, "startup_status", startupStatus) || !integer(o, "startup_error", startupError) ||
+        startupStatus < 0 || startupStatus > UINT16_MAX || startupError < 0 || startupError > UINT16_MAX) {
+      return false;
+    }
+  }
   // A stale/incorrect producer cannot mark a sample healthy by claiming OP.
   out.positionCounts = pos;
   out.velocityKnown = velocityKnown;
@@ -211,6 +229,13 @@ bool LiveTelemetry::parseLine(const QByteArray &line, LiveSnapshot &out) const {
   out.wkc = static_cast<int>(wkc);
   out.operational = o.value("op").toBool();
   out.enabled = o.value("enabled").toBool();
+  out.faultKnown = faultKnown;
+  out.faultClass = faultClass;
+  out.startupStatus = faultKnown ? static_cast<quint16>(startupStatus) : 0;
+  out.startupError = faultKnown ? static_cast<quint16>(startupError) : 0;
+  out.faultBlocks = faultKnown && o.value(QLatin1String("fault_blocks")).toBool();
+  out.deadlineKnown = faultKnown;
+  out.deadlineClear = faultKnown && o.value(QLatin1String("deadline_clear")).toBool();
   return true;
 }
 

@@ -155,15 +155,25 @@ void TelemetryPublisher::loop() {
       mu_.unlock();
     }
     if (!ready) continue;
-    char line[512];
+    char line[768];
+    const char *fault_class = "none";
+    if (frame.fault_class == 1) fault_class = "historical";
+    else if (frame.fault_class == 2) fault_class = "active";
+    else if (frame.fault_class == 3) fault_class = "acknowledge";
     const int written = std::snprintf(
         line, sizeof(line),
-        "{\"schema\":1,\"source\":\"%s\",\"position_counts\":%d,"
-        "\"velocity_counts_s\":null,\"torque_raw\":%d,\"following_counts\":%d,"
-        "\"statusword\":%u,\"error_code\":%u,\"wkc\":%d,\"op\":true,\"enabled\":%s}\n",
+        frame.fault_known
+            ? "{\"schema\":1,\"source\":\"%s\",\"position_counts\":%d,"
+              "\"velocity_counts_s\":null,\"torque_raw\":%d,\"following_counts\":%d,"
+              "\"statusword\":%u,\"error_code\":%u,\"wkc\":%d,\"op\":true,\"enabled\":%s,"
+              "\"startup_status\":%u,\"startup_error\":%u,\"fault_class\":\"%s\","
+              "\"fault_blocks\":%s,\"deadline_clear\":%s}\n"
+            : "{\"schema\":1,\"source\":\"%s\",\"position_counts\":%d,"
+              "\"velocity_counts_s\":null,\"torque_raw\":%d,\"following_counts\":%d,"
+              "\"statusword\":%u,\"error_code\":%u,\"wkc\":%d,\"op\":true,\"enabled\":%s}\n",
         source_.c_str(), frame.position, static_cast<int>(frame.torque), frame.following, frame.status,
-        frame.error, frame.wkc,
-        frame.enabled ? "true" : "false");
+        frame.error, frame.wkc, frame.enabled ? "true" : "false", frame.startup_status, frame.startup_error,
+        fault_class, frame.fault_blocks ? "true" : "false", frame.deadline_clear ? "true" : "false");
     if (written < 0 || static_cast<size_t>(written) >= sizeof(line) ||
         !send_line(client_fd_, line, static_cast<size_t>(written))) {
       ::close(client_fd_);

@@ -17,7 +17,7 @@ inline constexpr const char *kSocketName = "lichuan-command-v1";
 inline constexpr int kStaleCommandMs = 2000;
 inline constexpr int kStaleTelemetryMs = 500;
 
-enum class Op { Unknown, Enable, Move, Stop, Disable };
+enum class Op { Unknown, Enable, Move, Stop, Disable, Acknowledge };
 
 struct Command {
   uint64_t id = 0;
@@ -79,6 +79,7 @@ inline bool parse_command(const std::string &line, Command &command, std::string
         else if (value == "move") command.op = Op::Move;
         else if (value == "stop") command.op = Op::Stop;
         else if (value == "disable") command.op = Op::Disable;
+        else if (value == "ackfault") command.op = Op::Acknowledge;
         else command.op = Op::Unknown;
       } else if (key == "degrees") {
         command.degrees = std::stod(value);
@@ -135,6 +136,7 @@ struct GateState {
   bool telemetry_fresh = false;
   bool deadline_clear = false;
   bool faulted = false;
+  bool fault_recovered = false;
   bool servo_enabled = false;
   uint64_t last_id = 0;
 };
@@ -151,6 +153,18 @@ inline Decision admit(const Command &command, const GateState &gate) {
     return out;
   }
   if (command.op == Op::Stop || command.op == Op::Disable) {
+    out.accept = true;
+    return out;
+  }
+  if (command.op == Op::Acknowledge) {
+    if (gate.faulted && !gate.fault_recovered) {
+      out.reason = "drive fault is present; it is not cleared automatically";
+      return out;
+    }
+    if (!gate.faulted || !gate.fault_recovered) {
+      out.reason = "no fault acknowledgement is required";
+      return out;
+    }
     out.accept = true;
     return out;
   }

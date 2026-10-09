@@ -18,6 +18,13 @@ struct LiveSnapshot {
   int wkc = 0;
   bool operational = false;
   bool enabled = false;
+  bool faultKnown = false;
+  QString faultClass;
+  quint16 startupStatus = 0;
+  quint16 startupError = 0;
+  bool faultBlocks = false;
+  bool deadlineKnown = false;
+  bool deadlineClear = false;
 };
 
 // Reader only. Never opens an EtherCAT socket and has no method for motion commands.
