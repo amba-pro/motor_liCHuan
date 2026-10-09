@@ -322,6 +322,9 @@ void MainWindow::startReadOnlyDiagnostic() {
     diagnosticResult_->setText("Ошибка: lc_e_diag не найден. Сначала соберите проект через CMake.");
     return;
   }
+  if (QMessageBox::question(this, "Только чтение",
+        "Убедитесь, что другой EtherCAT-мастер НЕ работает на enp37s0.\\n"
+        "Будет запущен отдельный кратковременный SDO-сеанс без включения двигателя. Продолжить?") != QMessageBox::Yes) return;
   diagnostic_ = new QProcess(this);
   diagnostic_->setProgram(executable);
   diagnostic_->setArguments({"--if", "enp37s0"});
@@ -339,6 +342,9 @@ void MainWindow::startReadOnlyDiagnostic() {
                                "\\nПроверьте права raw socket и отсутствие другого EtherCAT-мастера.");
   });
   process->start();
+  QTimer::singleShot(15000, process, [process] {
+    if (process->state() != QProcess::NotRunning) process->kill();
+  });
 }
 
 void MainWindow::finishReadOnlyDiagnostic() {
