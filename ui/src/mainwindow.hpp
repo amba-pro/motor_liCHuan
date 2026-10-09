@@ -3,11 +3,14 @@
 #include "demo_plant.hpp"
 #include "live_telemetry.hpp"
 #include "safety_gate.hpp"
+#include "shaft_angle.hpp"
 
 #include <QMainWindow>
 #include <QStringList>
 
 class ChartPanel;
+class MotionClient;
+class QComboBox;
 class QDoubleSpinBox;
 class QLabel;
 class QTimer;
@@ -34,6 +37,14 @@ class MainWindow : public QMainWindow {
   void confirmDemoEnable();
   void confirmDemoMove();
   void showRealBlocked();
+  void connectController();
+  void requestEnable();
+  void requestMove();
+  void requestStop();
+  void requestDisable();
+  void updateMotionPlan();
+  bool confirmChecked(const QString &title, const QString &detail, bool &mount, bool &shaft, bool &noload,
+                      bool &estop, bool &brake, bool &present, bool &envelope, bool &loss, bool &timing);
   void startReadOnlyDiagnostic();
   void launchDiagnostic(const QString &program, const QStringList &args, int timeoutMs);
   void finishReadOnlyDiagnostic();
@@ -75,5 +86,12 @@ class MainWindow : public QMainWindow {
   QDoubleSpinBox *accelSpin_ = nullptr;
   QDoubleSpinBox *decelSpin_ = nullptr;
   QDoubleSpinBox *jerkSpin_ = nullptr;
+  QDoubleSpinBox *angle360Spin_ = nullptr;
+  QComboBox *directionChoice_ = nullptr;
+  QLabel *motionPlan_ = nullptr;
+  QLabel *commandState_ = nullptr;
+  QProcess *service_ = nullptr;
+  MotionClient *commands_ = nullptr;
+  quint64 nextCommandId_ = 1;
   bool absoluteMode_ = false;
 };

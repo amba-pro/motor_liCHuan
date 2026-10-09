@@ -247,11 +247,21 @@ inline bool plan_counts(int32_t start, int32_t target, double max_velocity, doub
   return true;
 }
 
-inline bool plan_relative(int32_t start, double degrees, std::vector<int32_t> &samples, int32_t &target,
-                          std::string &err) {
+inline bool plan_relative_profile(int32_t start, double degrees, double speed_rpm, double accel_rpm_s,
+                                  double decel_rpm_s, std::vector<int32_t> &samples, int32_t &target,
+                                  std::string &err) {
   samples.clear();
   if (!std::isfinite(degrees) || std::abs(degrees) < 1e-9 || std::abs(degrees) > kMaxMoveDegrees) {
     err = "relative move is outside the +/-1 degree commissioning limit";
+    return false;
+  }
+  if (!std::isfinite(speed_rpm) || speed_rpm < 0.1 || speed_rpm > kMaxSpeedRpm + 1e-9) {
+    err = "speed is outside 0.1 to 5 rpm";
+    return false;
+  }
+  if (!std::isfinite(accel_rpm_s) || accel_rpm_s < 0.1 || accel_rpm_s > kMaxAccelRpmPerS + 1e-9 ||
+      !std::isfinite(decel_rpm_s) || decel_rpm_s < 0.1 || decel_rpm_s > kMaxAccelRpmPerS + 1e-9) {
+    err = "acceleration or deceleration is outside 0.1 to 20 rpm/s";
     return false;
   }
   int32_t delta = 0;
@@ -263,10 +273,18 @@ inline bool plan_relative(int32_t start, double degrees, std::vector<int32_t> &s
     err = "target position overflow";
     return false;
   }
-  const double velocity = kMaxSpeedRpm / 60.0 * static_cast<double>(kCountsPerRevolution);
-  const double acceleration = kMaxAccelRpmPerS / 60.0 * static_cast<double>(kCountsPerRevolution);
+  // The verified generator is symmetric. Use the lower rate so neither ramp is exceeded.
+  const double used_accel = std::min(accel_rpm_s, decel_rpm_s);
+  const double velocity = speed_rpm / 60.0 * static_cast<double>(kCountsPerRevolution);
+  const double acceleration = used_accel / 60.0 * static_cast<double>(kCountsPerRevolution);
   const double jerk = acceleration / kJerkTimeS;
   return plan_counts(start, target, velocity, acceleration, jerk, samples, err);
+}
+
+inline bool plan_relative(int32_t start, double degrees, std::vector<int32_t> &samples, int32_t &target,
+                          std::string &err) {
+  return plan_relative_profile(start, degrees, kMaxSpeedRpm, kMaxAccelRpmPerS, kMaxAccelRpmPerS, samples, target,
+                               err);
 }
 
 // Keeps the command reached so far and does not append the rest of the move.

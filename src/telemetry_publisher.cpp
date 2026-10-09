@@ -66,8 +66,13 @@ bool TelemetryPublisher::bindSocket(std::string &err) {
   return true;
 }
 
-bool TelemetryPublisher::start(std::string &err) {
+bool TelemetryPublisher::start(std::string &err, const std::string &source) {
   if (run_) return true;
+  if (source.empty() || source.find('"') != std::string::npos) {
+    err = "telemetry source name is invalid";
+    return false;
+  }
+  source_ = source;
   if (!bindSocket(err)) {
     stop();
     return false;
@@ -153,10 +158,11 @@ void TelemetryPublisher::loop() {
     char line[512];
     const int written = std::snprintf(
         line, sizeof(line),
-        "{\"schema\":1,\"source\":\"lc_e_csp_hold\",\"position_counts\":%d,"
+        "{\"schema\":1,\"source\":\"%s\",\"position_counts\":%d,"
         "\"velocity_counts_s\":null,\"torque_raw\":%d,\"following_counts\":%d,"
         "\"statusword\":%u,\"error_code\":%u,\"wkc\":%d,\"op\":true,\"enabled\":%s}\n",
-        frame.position, static_cast<int>(frame.torque), frame.following, frame.status, frame.error, frame.wkc,
+        source_.c_str(), frame.position, static_cast<int>(frame.torque), frame.following, frame.status,
+        frame.error, frame.wkc,
         frame.enabled ? "true" : "false");
     if (written < 0 || static_cast<size_t>(written) >= sizeof(line) ||
         !send_line(client_fd_, line, static_cast<size_t>(written))) {

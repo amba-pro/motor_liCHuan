@@ -9,6 +9,7 @@
 
 #include <climits>
 #include <cstdint>
+#include <cstring>
 #include <string>
 
 #include <sys/socket.h>
@@ -36,8 +37,11 @@ bool producerExecutable(qint64 pid) {
   if (length <= 0) return false;
   path[length] = '\0';
   const std::string text(path);
-  constexpr const char *kName = "lc_e_csp_hold";
-  return text.size() >= 13 && text.compare(text.size() - 13, 13, kName) == 0;
+  auto ends_with = [&](const char *name) {
+    const std::size_t n = std::strlen(name);
+    return text.size() >= n && text.compare(text.size() - n, n, name) == 0;
+  };
+  return ends_with("lc_e_csp_hold") || ends_with("lc_e_csp_svc");
 }
 
 // File capabilities hide /proc/<pid>/exe from this unprivileged client.
@@ -45,7 +49,8 @@ bool producerExecutable(qint64 pid) {
 bool producerCapabilities(qint64 pid) {
   QFile comm(QStringLiteral("/proc/%1/comm").arg(pid));
   if (!comm.open(QIODevice::ReadOnly)) return false;
-  if (QString::fromUtf8(comm.readAll()).trimmed() != QLatin1String("lc_e_csp_hold")) return false;
+  const QString name = QString::fromUtf8(comm.readAll()).trimmed();
+  if (name != QLatin1String("lc_e_csp_hold") && name != QLatin1String("lc_e_csp_svc")) return false;
   QFile status(QStringLiteral("/proc/%1/status").arg(pid));
   if (!status.open(QIODevice::ReadOnly)) return false;
   const auto lines = QString::fromUtf8(status.readAll()).split('\n');
@@ -168,7 +173,11 @@ bool LiveTelemetry::parseLine(const QByteArray &line, LiveSnapshot &out) const {
   const QJsonDocument document = QJsonDocument::fromJson(line, &error);
   if (error.error != QJsonParseError::NoError || !document.isObject()) return false;
   const auto o = document.object();
-  if (o.value("schema").toInt() != 1 || o.value("source").toString() != QStringLiteral("lc_e_csp_hold")) return false;
+  const QString source = o.value("source").toString();
+  if (o.value("schema").toInt() != 1 ||
+      (source != QStringLiteral("lc_e_csp_hold") && source != QStringLiteral("lc_e_csp_svc"))) {
+    return false;
+  }
   qint64 pos = 0, vel = 0, torque = 0, follow = 0, status = 0, fault = 0, wkc = 0;
   const QJsonValue velocity = o.value(QLatin1String("velocity_counts_s"));
   bool velocityKnown = false;

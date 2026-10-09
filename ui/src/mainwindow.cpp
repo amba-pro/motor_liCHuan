@@ -3,10 +3,15 @@
 #include "chart_panel.hpp"
 #include "diagnostic_report.hpp"
 #include "machine.hpp"
+#include "motion_client.hpp"
 #include "motion_validator.hpp"
 
+#include <QCheckBox>
 #include <QCloseEvent>
+#include <QComboBox>
 #include <QCoreApplication>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -31,6 +36,7 @@
 #include <QTimer>
 #include <QVBoxLayout>
 
+#include <algorithm>
 #include <initializer_list>
 #include <utility>
 
@@ -84,11 +90,8 @@ void showUnavailable(std::initializer_list<QLabel *> labels) {
   }
 }
 
-bool anotherMasterRunning() {
+bool processListContains(const QStringList &names) {
   const QDir proc(QStringLiteral("/proc"));
-  const QStringList names = {QStringLiteral("lc_e_diag"), QStringLiteral("lc_e_control"),
-                             QStringLiteral("lc_e_op_disabled"), QStringLiteral("lc_e_csp_hold"),
-                             QStringLiteral("lc_e_csp_enable")};
   for (const QString &entry : proc.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
     bool numeric = false;
     entry.toInt(&numeric);
@@ -96,11 +99,31 @@ bool anotherMasterRunning() {
     QFile command(QStringLiteral("/proc/") + entry + QStringLiteral("/cmdline"));
     if (!command.open(QIODevice::ReadOnly)) continue;
     const QString text = QString::fromUtf8(command.readAll()).replace(QLatin1Char('\0'), QLatin1Char(' '));
+    const QString program = text.section(QLatin1Char(' '), 0, 0);
     for (const QString &name : names) {
-      if (text.contains(name)) return true;
+      if (program == name || program.endsWith(QLatin1Char('/') + name)) return true;
     }
   }
   return false;
+}
+
+bool anotherMasterRunning() {
+  const QStringList names = {QStringLiteral("lc_e_diag"), QStringLiteral("lc_e_control"),
+                             QStringLiteral("lc_e_op_disabled"), QStringLiteral("lc_e_csp_hold"),
+                             QStringLiteral("lc_e_csp_enable"), QStringLiteral("lc_e_csp_move"),
+                             QStringLiteral("lc_e_csp_svc")};
+  return processListContains(names);
+}
+
+bool motionServiceRunning() {
+  return processListContains({QStringLiteral("lc_e_csp_svc")});
+}
+
+bool foreignMasterRunning() {
+  const QStringList names = {QStringLiteral("lc_e_diag"), QStringLiteral("lc_e_control"),
+                             QStringLiteral("lc_e_op_disabled"), QStringLiteral("lc_e_csp_hold"),
+                             QStringLiteral("lc_e_csp_enable"), QStringLiteral("lc_e_csp_move")};
+  return processListContains(names);
 }
 
 }  // namespace
@@ -110,6 +133,14 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   resize(1280, 820);
   setMinimumSize(980, 640);
   build();
+  commands_ = new MotionClient(this);
+  connect(commands_, &MotionClient::acknowledgement, this, [this](const MotionAck &ack) {
+    const QString text = ack.result + (ack.reason.isEmpty() ? QString() : QStringLiteral(": ") + ack.reason);
+    if (commandState_) commandState_->setText(text);
+  });
+  connect(commands_, &MotionClient::linkChanged, this, [this](bool, const QString &detail) {
+    if (commandState_ && commandState_->text().isEmpty()) commandState_->setText(detail);
+  });
   plant_.start();
   live_.connectToLocalService(QString::fromLatin1(LiveTelemetry::kProductionSocket));
   poll_ = new QTimer(this);
@@ -119,12 +150,29 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 }
 
 MainWindow::~MainWindow() {
+  if (poll_) poll_->stop();
+  live_.disconnectService();
+  if (commands_) commands_->disconnectController();
   stopDiagnostic();
+  if (service_ && service_->state() != QProcess::NotRunning) {
+    service_->terminate();
+    if (!service_->waitForFinished(1500)) service_->kill();
+  }
   plant_.shutdown();
 }
 
 void MainWindow::closeEvent(QCloseEvent *event) {
+  if (poll_) poll_->stop();
+  live_.disconnectService();
   stopDiagnostic();
+  if (commands_ && commands_->connected()) {
+    commands_->sendLine(QStringLiteral("v1 id=%1 op=disable age_ms=0").arg(++nextCommandId_));
+    commands_->disconnectController();
+  }
+  if (service_ && service_->state() != QProcess::NotRunning) {
+    service_->terminate();
+    if (!service_->waitForFinished(1500)) service_->kill();
+  }
   plant_.shutdown();
   QMainWindow::closeEvent(event);
 }
@@ -247,8 +295,9 @@ void MainWindow::build() {
   angleDial->setNotchesVisible(true);
   angleDial->setMinimumSize(120, 120);
   angleDial->setValue(0);
-  auto *angleSpin = spin(0, 359.99, 0, 2, "angle360Spin");
-  angleSpin->setSuffix("°");
+  angle360Spin_ = spin(0, 359.99, 0, 2, "angle360Spin");
+  angle360Spin_->setSuffix("°");
+  auto *angleSpin = angle360Spin_;
   auto *rpmSlider = new QSlider(Qt::Horizontal, anglePanel);
   rpmSlider->setObjectName("targetRpmSlider");
   rpmSlider->setRange(1, 50);  // 0.1–5.0 rpm, within known commissioning ceiling
@@ -289,10 +338,23 @@ void MainWindow::build() {
   angleLayout->addWidget(rpmLabel);
   angleLayout->addWidget(rpmSlider);
   angleLayout->addWidget(targetPreview);
-  auto *angleLimit = new QLabel("0–360° — выбор целевого угла, НЕ разрешённый диапазон движения. "
-                                "До готовности CSP-контроллера пуск реального двигателя запрещён.",
-                                anglePanel);
+  directionChoice_ = new QComboBox(anglePanel);
+  directionChoice_->setObjectName("directionChoice");
+  directionChoice_->addItem("Кратчайший путь");
+  directionChoice_->addItem("По часовой");
+  directionChoice_->addItem("Против часовой");
+  motionPlan_ = new QLabel("Движение не рассчитано: нет свежей телеметрии.", anglePanel);
+  motionPlan_->setObjectName("motionPlanLabel");
+  motionPlan_->setWordWrap(true);
+  auto *angleLimit = new QLabel(
+      "0–360° — угол вала по модулю 360, НЕ механический ход. "
+      "Полный оборот не разрешён. Проверенный конверт — не больше ±1°. "
+      "По часовой и против часовой не сопоставлены со знаком энкодера. "
+      "Отключение серво не включает внешний тормоз. Программный стоп — не аварийный стоп.",
+      anglePanel);
   angleLimit->setWordWrap(true);
+  angleLayout->addWidget(directionChoice_);
+  angleLayout->addWidget(motionPlan_);
   angleLayout->addWidget(angleLimit);
   form->addRow(anglePanel);
   formBox->setMinimumHeight(formBox->sizeHint().height());
@@ -311,23 +373,37 @@ void MainWindow::build() {
   auto *demoDisable = new QPushButton("Отключить серво (демо)");
   auto *demoStart = new QPushButton("Пуск (демо)");
   auto *demoStop = new QPushButton("Стоп (демо)");
-  auto *realEnable = new QPushButton("Реальное включение");
-  auto *realMove = new QPushButton("Реальное движение");
+  auto *connectDrive = new QPushButton("Подключить");
+  auto *realEnable = new QPushButton("Включить серво");
+  auto *realMove = new QPushButton("Движение к цели");
+  auto *realStop = new QPushButton("Управляемый стоп");
+  auto *realDisable = new QPushButton("Отключить серво");
   demoEnable->setObjectName("demoEnableButton");
   demoDisable->setObjectName("demoDisableButton");
   demoStart->setObjectName("demoStartButton");
   demoStop->setObjectName("demoStopButton");
+  connectDrive->setObjectName("connectServiceButton");
   realEnable->setObjectName("realEnableButton");
   realMove->setObjectName("realMoveButton");
+  realStop->setObjectName("controlledStopButton");
+  realDisable->setObjectName("disableServoButton");
+  commandState_ = new QLabel("Команда на привод не отправлялась.", buttons);
+  commandState_->setObjectName("commandStateLabel");
+  commandState_->setWordWrap(true);
   connect(demoEnable, &QPushButton::clicked, this, &MainWindow::confirmDemoEnable);
   connect(demoDisable, &QPushButton::clicked, this, [this] { plant_.disable(); });
   connect(demoStart, &QPushButton::clicked, this, &MainWindow::confirmDemoMove);
   connect(demoStop, &QPushButton::clicked, this, [this] { plant_.stop(); });
-  connect(realEnable, &QPushButton::clicked, this, &MainWindow::showRealBlocked);
-  connect(realMove, &QPushButton::clicked, this, &MainWindow::showRealBlocked);
-  for (QPushButton *button : {demoEnable, demoDisable, demoStart, demoStop, realEnable, realMove}) {
+  connect(connectDrive, &QPushButton::clicked, this, &MainWindow::connectController);
+  connect(realEnable, &QPushButton::clicked, this, &MainWindow::requestEnable);
+  connect(realMove, &QPushButton::clicked, this, &MainWindow::requestMove);
+  connect(realStop, &QPushButton::clicked, this, &MainWindow::requestStop);
+  connect(realDisable, &QPushButton::clicked, this, &MainWindow::requestDisable);
+  for (QPushButton *button : {connectDrive, realEnable, realMove, realStop, realDisable, demoEnable, demoDisable,
+                              demoStart, demoStop}) {
     buttonLayout->addWidget(button);
   }
+  buttonLayout->addWidget(commandState_);
   buttonLayout->addStretch();
   motionLayout->addWidget(buttons);
   tabs->addTab(motion, "Положение");
@@ -424,6 +500,7 @@ void MainWindow::build() {
 }
 
 void MainWindow::refresh() {
+  updateMotionPlan();
   const PlantSnapshot snap = plant_.snapshot();
   if (live_.fresh()) {
     const LiveSnapshot &telemetry = live_.snapshot();
@@ -512,6 +589,212 @@ void MainWindow::confirmDemoMove() {
 
 void MainWindow::showRealBlocked() {
   QMessageBox::warning(this, "Заблокировано", realBlockText());
+}
+
+void MainWindow::updateMotionPlan() {
+  if (!motionPlan_ || !angle360Spin_ || !directionChoice_ || !speedSpin_ || !accelSpin_ || !decelSpin_) return;
+  if (!live_.fresh()) {
+    motionPlan_->setText("Движение заблокировано: нет свежей телеметрии привода. "
+                          "Подключение не включает серво и не запускает движение.");
+    return;
+  }
+  const auto direction = static_cast<TravelDirection>(directionChoice_->currentIndex());
+  const TravelPlan plan = plan_shaft_move(static_cast<int32_t>(live_.snapshot().positionCounts), angle360Spin_->value(),
+                                           direction, speedSpin_->value(), accelSpin_->value(), decelSpin_->value());
+  const double used = std::min(accelSpin_->value(), decelSpin_->value());
+  if (!plan.commandable) {
+    motionPlan_->setText(QString("Движение заблокировано: %1\nСкорость %2 об/мин, разгон %3, торможение %4 об/мин/с.")
+                             .arg(QString::fromStdString(plan.block))
+                             .arg(speedSpin_->value(), 0, 'f', 1)
+                             .arg(accelSpin_->value(), 0, 'f', 1)
+                             .arg(decelSpin_->value(), 0, 'f', 1));
+    return;
+  }
+  motionPlan_->setText(
+      QString("Запрос %1° (%2 отсчётов энкодера), скорость %3 об/мин, разгон %4, торможение %5 об/мин/с. "
+              "Профиль симметричный, не быстрее %6 об/мин/с. Оценка длительности %7 мс. "
+              "Серво само не включится.")
+          .arg(plan.relative_deg, 0, 'f', 3)
+          .arg(plan.counts)
+          .arg(speedSpin_->value(), 0, 'f', 1)
+          .arg(accelSpin_->value(), 0, 'f', 1)
+          .arg(decelSpin_->value(), 0, 'f', 1)
+          .arg(used, 0, 'f', 1)
+          .arg(plan.duration_ms));
+}
+
+bool MainWindow::confirmChecked(const QString &title, const QString &detail, bool &mount, bool &shaft, bool &noload,
+                                bool &estop, bool &brake, bool &present, bool &envelope, bool &loss, bool &timing) {
+  QDialog dialog(this);
+  dialog.setWindowTitle(title);
+  auto *layout = new QVBoxLayout(&dialog);
+  auto *text = new QLabel(detail, &dialog);
+  text->setWordWrap(true);
+  layout->addWidget(text);
+  auto box = [&](const QString &label) {
+    auto *check = new QCheckBox(label, &dialog);
+    check->setChecked(false);
+    layout->addWidget(check);
+    return check;
+  };
+  auto *mountBox = box("Крепление подтверждено");
+  auto *shaftBox = box("Вал свободен");
+  auto *loadBox = box("Нагрузки нет");
+  auto *estopBox = box("Аппаратный аварийный стоп проверен");
+  auto *brakeBox = box("Тормоз понят: отключение серво его не включает");
+  auto *presentBox = box("Оператор на месте");
+  auto *envelopeBox = box("Достаточно конверта ±1°");
+  auto *lossBox = box("Остановка при потере связи проверена на включённом приводе");
+  auto *timingBox = box("30-секундный цикл реального времени принят");
+  auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+  buttons->button(QDialogButtonBox::Ok)->setText("Отправить как отмечено");
+  layout->addWidget(buttons);
+  connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+  connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+  if (dialog.exec() != QDialog::Accepted) return false;
+  mount = mountBox->isChecked();
+  shaft = shaftBox->isChecked();
+  noload = loadBox->isChecked();
+  estop = estopBox->isChecked();
+  brake = brakeBox->isChecked();
+  present = presentBox->isChecked();
+  envelope = envelopeBox->isChecked();
+  loss = lossBox->isChecked();
+  timing = timingBox->isChecked();
+  return true;
+}
+
+void MainWindow::connectController() {
+  if ((service_ && service_->state() != QProcess::NotRunning) || motionServiceRunning()) {
+    if (foreignMasterRunning()) {
+      if (commandState_) {
+        commandState_->setText("Рядом с контроллером есть другой EtherCAT-мастер. Команда не отправлена.");
+      }
+      return;
+    }
+    commands_->connectToController();
+    if (commandState_) commandState_->setText("Командный канал контроллера открыт. Серво не включается.");
+    return;
+  }
+  if (anotherMasterRunning()) {
+    if (commandState_) {
+      commandState_->setText("Другой EtherCAT-мастер уже держит интерфейс. Второй сокет не открывается.");
+    }
+    return;
+  }
+  const QString executable =
+      QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(QStringLiteral("../lc_e_csp_svc"));
+  if (!QFileInfo(executable).isExecutable()) {
+    if (commandState_) commandState_->setText("Ошибка: lc_e_csp_svc не найден. Соберите проект и выдайте ему права.");
+    return;
+  }
+  service_ = new QProcess(this);
+  service_->setProgram(executable);
+  service_->setArguments({QStringLiteral("--if"), QStringLiteral("enp37s0")});
+  service_->setProcessChannelMode(QProcess::MergedChannels);
+  connect(service_, &QProcess::started, this, [this] {
+    QTimer::singleShot(400, this, [this] { commands_->connectToController(); });
+  });
+  connect(service_, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this,
+          [this](int code, QProcess::ExitStatus) {
+    const QString output = QString::fromUtf8(service_->readAll());
+    if (commandState_) {
+      commandState_->setText(QString("Контроллер завершился (%1). %2").arg(code).arg(output.left(400)));
+    }
+  });
+  service_->start();
+  if (commandState_) commandState_->setText("Запуск контроллера. Двигатель не включается и не двигается.");
+}
+
+QString flagLine(quint64 id, const QString &op, double degrees, double speed, double accel, double decel, bool mount,
+                 bool shaft, bool noload, bool estop, bool brake, bool present, bool envelope, bool loss, bool timing) {
+  auto bit = [](bool value) { return value ? QStringLiteral("1") : QStringLiteral("0"); };
+  return QStringLiteral("v1 id=%1 op=%2 degrees=%3 speed=%4 accel=%5 decel=%6 age_ms=0")
+             .arg(id)
+             .arg(op)
+             .arg(degrees, 0, 'f', 4)
+             .arg(speed, 0, 'f', 2)
+             .arg(accel, 0, 'f', 2)
+             .arg(decel, 0, 'f', 2) +
+         QStringLiteral(" mount=%1 shaft=%2 noload=%3 estop=%4 brake=%5 present=%6 envelope=%7 loss=%8 timing=%9")
+             .arg(bit(mount), bit(shaft), bit(noload), bit(estop), bit(brake), bit(present), bit(envelope), bit(loss),
+                  bit(timing));
+}
+
+void MainWindow::requestEnable() {
+  if (!commands_ || !commands_->connected()) {
+    if (commandState_) commandState_->setText("Сначала нажмите «Подключить». Включение не отправлено.");
+    return;
+  }
+  if (!live_.fresh()) {
+    if (commandState_) commandState_->setText("Включение отклонено: телеметрия недействительна. " + live_.problem());
+    return;
+  }
+  bool mount = false, shaft = false, noload = false, estop = false, brake = false, present = false, envelope = false,
+       loss = false, timing = false;
+  const QString detail = realBlockText() +
+                         "\n\nФлаги ниже не отмечены. Отметьте только то, что проверено. "
+                         "Потеря связи на включённом приводе ещё не подтверждалась. "
+                         "Отключение серво не включает тормоз.";
+  if (!confirmChecked("Включение серво", detail, mount, shaft, noload, estop, brake, present, envelope, loss, timing)) {
+    return;
+  }
+  commands_->sendLine(flagLine(++nextCommandId_, "enable", 0, speedSpin_->value(), accelSpin_->value(),
+                               decelSpin_->value(), mount, shaft, noload, estop, brake, present, envelope, loss,
+                               timing));
+  if (commandState_) commandState_->setText("Команда включения отправлена. Ожидание ответа контроллера.");
+}
+
+void MainWindow::requestMove() {
+  if (!commands_ || !commands_->connected() || !live_.fresh() || !angle360Spin_) {
+    if (commandState_) commandState_->setText("Движение не отправлено: нет подключения или свежей телеметрии.");
+    return;
+  }
+  const auto direction = static_cast<TravelDirection>(directionChoice_->currentIndex());
+  const TravelPlan plan = plan_shaft_move(static_cast<int32_t>(live_.snapshot().positionCounts), angle360Spin_->value(),
+                                           direction, speedSpin_->value(), accelSpin_->value(), decelSpin_->value());
+  if (!plan.commandable) {
+    if (commandState_) commandState_->setText(QString::fromStdString(plan.block));
+    QMessageBox::warning(this, "Движение заблокировано", QString::fromStdString(plan.block));
+    return;
+  }
+  bool mount = false, shaft = false, noload = false, estop = false, brake = false, present = false, envelope = false,
+       loss = false, timing = false;
+  const QString detail =
+      QString("Будет запрошено %1° = %2 отсчётов, скорость %3 об/мин, разгон %4, торможение %5 об/мин/с, "
+              "оценка %6 мс.\nЭто не запускается, пока диалог не подтверждён. Флаги не подставлены.")
+          .arg(plan.relative_deg, 0, 'f', 3)
+          .arg(plan.counts)
+          .arg(speedSpin_->value(), 0, 'f', 1)
+          .arg(accelSpin_->value(), 0, 'f', 1)
+          .arg(decelSpin_->value(), 0, 'f', 1)
+          .arg(plan.duration_ms);
+  if (!confirmChecked("Первое физическое движение", detail, mount, shaft, noload, estop, brake, present, envelope,
+                      loss, timing)) {
+    return;
+  }
+  commands_->sendLine(flagLine(++nextCommandId_, "move", plan.relative_deg, speedSpin_->value(), accelSpin_->value(),
+                               decelSpin_->value(), mount, shaft, noload, estop, brake, present, envelope, loss,
+                               timing));
+  if (commandState_) commandState_->setText("Команда движения отправлена. Ожидание ответа контроллера.");
+}
+
+void MainWindow::requestStop() {
+  if (!commands_ || !commands_->connected()) {
+    if (commandState_) commandState_->setText("Стоп не отправлен: командный канал закрыт. Это не аварийный стоп.");
+    return;
+  }
+  commands_->sendLine(QStringLiteral("v1 id=%1 op=stop age_ms=0").arg(++nextCommandId_));
+  if (commandState_) commandState_->setText("Управляемый стоп отправлен. Аппаратный аварийный стоп не заменяется.");
+}
+
+void MainWindow::requestDisable() {
+  if (!commands_ || !commands_->connected()) {
+    if (commandState_) commandState_->setText("Отключение не отправлено: командный канал закрыт. Тормоз от этого не включается.");
+    return;
+  }
+  commands_->sendLine(QStringLiteral("v1 id=%1 op=disable age_ms=0").arg(++nextCommandId_));
+  if (commandState_) commandState_->setText("Отключение серво отправлено. Внешний тормоз этой командой не включается.");
 }
 
 void MainWindow::stopDiagnostic() {
