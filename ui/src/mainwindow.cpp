@@ -25,6 +25,7 @@
 #include <QTimer>
 #include <QVBoxLayout>
 
+#include <initializer_list>
 #include <utility>
 
 namespace {
@@ -51,6 +52,30 @@ QDoubleSpinBox *spin(double min, double max, double value, int decimals, const Q
   box->setValue(value);
   box->setObjectName(objectName);
   return box;
+}
+
+QString cia402Text(quint16 status) {
+  const quint16 masked = status & 0x006F;
+  const quint16 fault = status & 0x004F;
+  QString name = "Unknown";
+  if (fault == 0x0008 || fault == 0x000F) name = fault == 0x0008 ? "Fault" : "Fault reaction";
+  else if (fault == 0x0000) name = "Not ready";
+  else if (fault == 0x0040) name = "Switch on disabled";
+  else if (masked == 0x0021) name = "Ready to switch on";
+  else if (masked == 0x0023) name = "Switched on";
+  else if (masked == 0x0027) name = "Operation enabled";
+  else if (masked == 0x0007) name = "Quick stop";
+  return QString("0x%1 %2").arg(status, 4, 16, QChar('0')).arg(name);
+}
+
+double countsToDegrees(qint64 counts) {
+  return static_cast<double>(counts) / static_cast<double>(kCountsPerRevolution) * 360.0;
+}
+
+void showUnavailable(std::initializer_list<QLabel *> labels) {
+  for (QLabel *label : labels) {
+    if (label) label->setText("N/A");
+  }
 }
 
 bool anotherMasterRunning() {
@@ -80,6 +105,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   setMinimumSize(980, 640);
   build();
   plant_.start();
+  live_.connectToLocalService(QString::fromLatin1(LiveTelemetry::kProductionSocket));
   poll_ = new QTimer(this);
   connect(poll_, &QTimer::timeout, this, &MainWindow::refresh);
   poll_->start(50);
@@ -110,6 +136,10 @@ void MainWindow::build() {
   banner->setObjectName("demoBanner");
   banner->setWordWrap(true);
   root->addWidget(banner);
+  liveState_ = new QLabel("Реальная телеметрия: нет подключения", this);
+  liveState_->setObjectName("liveTelemetryStatus");
+  root->addWidget(liveState_);
+  live_.connectToLocalService("lichuan-telemetry-v1");
 
   auto *statusPanel = new QGridLayout;
   statusPanel->setHorizontalSpacing(12);
@@ -251,6 +281,44 @@ void MainWindow::build() {
   charts_ = new ChartPanel;
   tabs->addTab(charts_, "Графики");
 
+  auto *livePage = new QWidget;
+  auto *liveLayout = new QVBoxLayout(livePage);
+  auto *liveBanner = new QLabel(
+      "Реальные измерения PDO. Пока кадр свежий, числа ниже с привода. "
+      "Демонстрация на других вкладках ими не заменяется. Скорость 0x606C в PDO нет.",
+      livePage);
+  liveBanner->setObjectName("liveBanner");
+  liveBanner->setWordWrap(true);
+  liveLayout->addWidget(liveBanner);
+  auto *liveGrid = new QGridLayout;
+  auto liveReadout = [](const QString &caption, const QString &name, QLabel *&slot) {
+    slot = new QLabel("N/A");
+    slot->setObjectName(name);
+    slot->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    auto *box = new QWidget;
+    auto *column = new QVBoxLayout(box);
+    column->setContentsMargins(0, 0, 0, 0);
+    auto *title = new QLabel(caption);
+    title->setStyleSheet("color: #9aabba;");
+    column->addWidget(title);
+    column->addWidget(slot);
+    return box;
+  };
+  liveGrid->addWidget(liveReadout("Положение, град", "livePosition", livePosition_), 0, 0);
+  liveGrid->addWidget(liveReadout("Скорость, об/мин", "liveVelocity", liveVelocity_), 0, 1);
+  liveGrid->addWidget(liveReadout("Момент, %", "liveTorque", liveTorque_), 0, 2);
+  liveGrid->addWidget(liveReadout("Ошибка слежения, град", "liveFollowing", liveFollowing_), 1, 0);
+  liveGrid->addWidget(liveReadout("CiA402", "liveStatus", liveStatus_), 1, 1);
+  liveGrid->addWidget(liveReadout("Код ошибки", "liveError", liveError_), 1, 2);
+  liveGrid->addWidget(liveReadout("EtherCAT OP", "liveOp", liveOp_), 2, 0);
+  liveGrid->addWidget(liveReadout("Рабочий счётчик", "liveWkc", liveWkc_), 2, 1);
+  liveGrid->addWidget(liveReadout("Связь", "liveHealth", liveState_), 2, 2);
+  liveLayout->addLayout(liveGrid);
+  liveCharts_ = new ChartPanel(livePage, false);
+  liveCharts_->setObjectName("liveCharts");
+  liveLayout->addWidget(liveCharts_, 1);
+  tabs->addTab(livePage, "Измерения");
+
   auto *diagnostics = new QWidget;
   auto *diagLayout = new QVBoxLayout(diagnostics);
   auto *diag = new QLabel(
@@ -284,7 +352,22 @@ void MainWindow::build() {
 
 void MainWindow::refresh() {
   const PlantSnapshot snap = plant_.snapshot();
-  ethercatState_->setText("Нет соединения");
+  if (live_.fresh()) {
+    const LiveSnapshot &telemetry = live_.snapshot();
+    const double degrees = static_cast<double>(telemetry.positionCounts) * 360.0 / 8388608.0;
+    const double rpm = static_cast<double>(telemetry.velocityCountsPerSecond) * 60.0 / 8388608.0;
+    liveState_->setText(QString("РЕАЛЬНЫЕ ДАННЫЕ / только чтение: положение %1°, скорость %2 об/мин, момент %3 %%, ошибка слежения %4 отсчётов, 0x6041=%5, 0x603F=%6, WKC=%7, OP=%8")
+        .arg(degrees, 0, 'f', 4).arg(rpm, 0, 'f', 3)
+        .arg(static_cast<double>(telemetry.torqueRaw) / 10.0, 0, 'f', 1)
+        .arg(telemetry.followingCounts)
+        .arg(telemetry.statusword, 4, 16, QChar('0'))
+        .arg(telemetry.errorCode, 4, 16, QChar('0'))
+        .arg(telemetry.wkc)
+        .arg(telemetry.operational ? "ДА" : "НЕТ"));
+  } else {
+    liveState_->setText("Реальная телеметрия недоступна или устарела. " + live_.problem());
+  }
+  ethercatState_->setText("Нет соединения (демо)");
   servoState_->setText(QString::fromStdString(snap.cia402));
   positionValue_->setText(QString::number(snap.positionDeg, 'f', 4));
   velocityValue_->setText(QString::number(snap.velocityRpm, 'f', 3));
@@ -298,6 +381,31 @@ void MainWindow::refresh() {
   chartTime_ += 0.05;
   charts_->append(chartTime_, snap.targetDeg, snap.positionDeg, snap.velocityRpm, snap.followingDeg,
                   snap.torquePercent);
+
+  if (!live_.fresh()) {
+    showUnavailable({livePosition_, liveVelocity_, liveTorque_, liveFollowing_, liveStatus_, liveError_, liveOp_,
+                     liveWkc_});
+    if (liveState_) liveState_->setText(live_.problem().isEmpty() ? "N/A" : live_.problem());
+    return;
+  }
+  const LiveSnapshot sample = live_.snapshot();
+  liveTime_ += 0.05;
+  livePosition_->setText(QString::number(countsToDegrees(sample.positionCounts), 'f', 4) + "°");
+  liveVelocity_->setText(sample.velocityKnown
+                             ? QString::number(sample.velocityCountsPerSecond * 60.0 / kCountsPerRevolution, 'f', 3)
+                             : "N/A");
+  liveTorque_->setText(QString::number(sample.torqueRaw / 10.0, 'f', 1));
+  liveFollowing_->setText(QString::number(countsToDegrees(sample.followingCounts), 'f', 4));
+  liveStatus_->setText(cia402Text(sample.statusword));
+  liveError_->setText(QString::number(sample.errorCode));
+  liveOp_->setText(sample.operational ? "OP" : "не OP");
+  liveWkc_->setText(QString::number(sample.wkc));
+  liveState_->setText(sample.enabled ? "свежие данные; серво включено на приводе" : "свежие данные PDO");
+  if (liveCharts_) {
+    liveCharts_->appendMeasured(liveTime_, countsToDegrees(sample.positionCounts), sample.velocityKnown,
+                                sample.velocityCountsPerSecond * 60.0 / kCountsPerRevolution,
+                                countsToDegrees(sample.followingCounts), sample.torqueRaw / 10.0);
+  }
 }
 
 void MainWindow::confirmDemoEnable() {

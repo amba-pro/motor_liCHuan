@@ -43,7 +43,7 @@ QChartView *makeView(const QString &title, QLineSeries *series, QValueAxis *axis
 
 }  // namespace
 
-ChartPanel::ChartPanel(QWidget *parent) : QWidget(parent) {
+ChartPanel::ChartPanel(QWidget *parent, bool demonstration) : QWidget(parent) {
   target_ = new QLineSeries(this);
   actual_ = new QLineSeries(this);
   velocity_ = new QLineSeries(this);
@@ -67,8 +67,17 @@ ChartPanel::ChartPanel(QWidget *parent) : QWidget(parent) {
   positionView->chart()->legend()->setLabelColor(QColor("#d7e0e8"));
   target_->setName("Задание");
   actual_->setName("Факт");
+  if (!demonstration) {
+    actual_->setObjectName("livePositionSeries");
+    velocity_->setObjectName("liveVelocitySeries");
+    following_->setObjectName("liveFollowingSeries");
+    torque_->setObjectName("liveTorqueSeries");
+  }
 
-  auto *note = new QLabel("Графики демонстрации. Это не измерения реального привода.", this);
+  auto *note = new QLabel(demonstration
+                              ? "Графики демонстрации. Это не измерения реального привода."
+                              : "Живые графики PDO. Скорость 0x606C в карте процесса нет, поэтому её график пуст.",
+                          this);
   note->setObjectName("chartNote");
   auto *layout = new QGridLayout(this);
   layout->addWidget(note, 0, 0, 1, 2);
@@ -95,5 +104,20 @@ void ChartPanel::append(double timeSec, double targetDeg, double actualDeg, doub
   addPoint(torque_, xTorque_, yTorque_, timeSec, torquePercent);
   const double ySpan = std::max({0.2, std::abs(targetDeg) * 1.4, std::abs(actualDeg) * 1.4});
   yPosition_->setRange(-ySpan, ySpan);
+  ++count_;
+}
+
+int ChartPanel::actualCount() const { return actual_->count(); }
+int ChartPanel::velocityCount() const { return velocity_->count(); }
+int ChartPanel::followingCount() const { return following_->count(); }
+int ChartPanel::torqueCount() const { return torque_->count(); }
+
+void ChartPanel::appendMeasured(double timeSec, double actualDeg, bool velocityKnown, double rpm,
+                               double followingDeg, double torquePercent) {
+  addPoint(actual_, xPosition_, yPosition_, timeSec, actualDeg);
+  if (velocityKnown) addPoint(velocity_, xVelocity_, yVelocity_, timeSec, rpm);
+  addPoint(following_, xFollowing_, yFollowing_, timeSec, followingDeg);
+  addPoint(torque_, xTorque_, yTorque_, timeSec, torquePercent);
+  yPosition_->setRange(actualDeg - 2.0, actualDeg + 2.0);
   ++count_;
 }

@@ -45,7 +45,7 @@ target_link_libraries(lc_e_control PRIVATE lc_e_core)
 add_executable(lc_e_op_disabled src/lc_e_op_disabled.cpp)
 target_link_libraries(lc_e_op_disabled PRIVATE lc_e_core)
 
-add_executable(lc_e_csp_hold src/lc_e_csp_hold.cpp)
+add_executable(lc_e_csp_hold src/lc_e_csp_hold.cpp src/telemetry_publisher.cpp)
 target_link_libraries(lc_e_csp_hold PRIVATE lc_e_core)
 
 add_executable(lc_e_csp_enable src/lc_e_csp_enable.cpp)
@@ -53,7 +53,7 @@ target_link_libraries(lc_e_csp_enable PRIVATE lc_e_core)
 
 install(TARGETS lc_e_diag lc_e_control RUNTIME DESTINATION bin)
 
-find_package(Qt6 QUIET COMPONENTS Widgets Charts Test)
+find_package(Qt6 QUIET COMPONENTS Widgets Charts Test Network)
 if(Qt6_FOUND)
   enable_testing()
   add_subdirectory(ui)

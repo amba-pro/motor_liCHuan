@@ -43,7 +43,11 @@ void WindowTest::demoWindowShowsOneRealAxisAndBlocksVelocity() {
   QVERIFY(window.realBlockText().contains("не отправлена"));
   auto *pages = window.findChild<QTabWidget *>("pages");
   QVERIFY(pages != nullptr);
-  QCOMPARE(pages->count(), 5);
+  QCOMPARE(pages->count(), 6);
+  auto *liveVelocity = window.findChild<QLabel *>("liveVelocity");
+  QVERIFY(liveVelocity != nullptr);
+  QCOMPARE(liveVelocity->text(), QString("N/A"));
+  QVERIFY(window.findChild<QLabel *>("liveBanner")->text().contains("Реальные измерения"));
   window.resize(1400, 900);
   QApplication::processEvents();
   QVERIFY(window.width() >= 1300);

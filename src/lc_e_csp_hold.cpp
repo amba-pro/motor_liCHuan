@@ -6,6 +6,7 @@
 
 #include "ethercat_master.hpp"
 #include "rt_setup.hpp"
+#include "telemetry_publisher.hpp"
 
 extern "C" {
 #include "ethercat.h"
@@ -137,9 +138,11 @@ void report(const std::string &key, const std::string &value) {
 int main(int argc, char **argv) {
   std::string iface = "enp37s0";
   int seconds = kDefaultSeconds;
+  bool telemetry_enabled = false;
   for (int i = 1; i < argc; ++i) {
     if (std::string(argv[i]) == "--if" && i + 1 < argc) iface = argv[++i];
     if (std::string(argv[i]) == "--seconds" && i + 1 < argc) seconds = std::stoi(argv[++i]);
+    if (std::string(argv[i]) == "--telemetry") telemetry_enabled = true;
   }
   if (seconds < 1 || seconds > 120) {
     std::cerr << "BLOCKED: benchmark duration is out of range\n";
@@ -245,6 +248,15 @@ int main(int argc, char **argv) {
   if ((ec_slave[1].state & 0x0F) != EC_STATE_PRE_OP) {
     std::cerr << "BLOCKED: config_map left PREOP\n";
     return 1;
+  }
+
+  TelemetryPublisher telemetry;
+  if (telemetry_enabled) {
+    if (!telemetry.start(err)) {
+      std::cerr << "BLOCKED: " << err << "\n";
+      return 1;
+    }
+    std::cout << "telemetry socket " << TelemetryPublisher::kSocketPath << "\n";
   }
 
   std::memcpy(ec_slave[1].outputs, image, kRxBytes);
@@ -371,10 +383,23 @@ int main(int argc, char **argv) {
       uint16_t status = 0;
       int32_t actual = 0;
       int32_t following = 0;
+      int16_t torque_pdo = 0;
       std::memcpy(&last_error, ec_slave[1].inputs, 2);
       std::memcpy(&status, ec_slave[1].inputs + 2, 2);
       std::memcpy(&actual, ec_slave[1].inputs + 4, 4);
+      std::memcpy(&torque_pdo, ec_slave[1].inputs + 8, 2);
       std::memcpy(&following, ec_slave[1].inputs + 10, 4);
+      if (telemetry_enabled) {
+        TelemetryFrame frame;
+        frame.position = actual;
+        frame.torque = torque_pdo;
+        frame.following = following;
+        frame.status = status;
+        frame.error = last_error;
+        frame.wkc = wkc;
+        frame.enabled = operation_enabled(status);
+        telemetry.publish(frame);
+      }
       if (!frozen) {
         if (std::llabs(static_cast<long long>(actual) - position) > 10) {
           std::cerr << "BLOCKED: first OP position " << actual << " is far from SDO " << position << "\n";
