@@ -5,6 +5,11 @@
 #include "motion_validator.hpp"
 
 #include <QCloseEvent>
+#include <QCoreApplication>
+#include <QDir>
+#include <QFileInfo>
+#include <QProcess>
+#include <QRegularExpression>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QFrame>
@@ -64,6 +69,10 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 MainWindow::~MainWindow() { plant_.shutdown(); }
 
 void MainWindow::closeEvent(QCloseEvent *event) {
+  if (diagnostic_ && diagnostic_->state() != QProcess::NotRunning) {
+    diagnostic_->kill();
+    diagnostic_->waitForFinished(3000);
+  }
   plant_.shutdown();
   QMainWindow::closeEvent(event);
 }
@@ -237,6 +246,15 @@ void MainWindow::build() {
   diag->setObjectName("diagnosticsText");
   diag->setWordWrap(true);
   diagLayout->addWidget(diag);
+  diagnoseButton_ = new QPushButton("Считать реальные параметры (SDO, без включения)", diagnostics);
+  diagnoseButton_->setObjectName("readOnlyDiagnosticButton");
+  diagLayout->addWidget(diagnoseButton_);
+  diagnosticResult_ = new QLabel("Снимок не получен. Подключение к EtherCAT отсутствует.", diagnostics);
+  diagnosticResult_->setObjectName("readOnlyDiagnosticResult");
+  diagnosticResult_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+  diagnosticResult_->setWordWrap(true);
+  diagLayout->addWidget(diagnosticResult_);
+  connect(diagnoseButton_, &QPushButton::clicked, this, &MainWindow::startReadOnlyDiagnostic);
   diagLayout->addStretch();
   tabs->addTab(diagnostics, "Диагностика");
 
@@ -293,4 +311,63 @@ void MainWindow::confirmDemoMove() {
 
 void MainWindow::showRealBlocked() {
   QMessageBox::warning(this, "Заблокировано", realBlockText());
+}
+
+void MainWindow::startReadOnlyDiagnostic() {
+  // lc_e_diag is the existing read-only SDO tool. Never launch an enabled or cyclic motion master here.
+  if (diagnostic_ && diagnostic_->state() != QProcess::NotRunning) return;
+  const QString executable = QDir(QCoreApplication::applicationDirPath())
+                                 .absoluteFilePath("../lc_e_diag");
+  if (!QFileInfo(executable).isExecutable()) {
+    diagnosticResult_->setText("Ошибка: lc_e_diag не найден. Сначала соберите проект через CMake.");
+    return;
+  }
+  diagnostic_ = new QProcess(this);
+  diagnostic_->setProgram(executable);
+  diagnostic_->setArguments({"--if", "enp37s0"});
+  diagnoseButton_->setEnabled(false);
+  diagnosticResult_->setText("Чтение SDO… Это отдельный кратковременный сеанс, НЕ EtherCAT OP и НЕ живой график.");
+  QProcess *const process = diagnostic_;
+  connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this,
+          [this, process](int, QProcess::ExitStatus) {
+    if (diagnostic_ != process) return;
+    finishReadOnlyDiagnostic();
+  });
+  connect(process, &QProcess::errorOccurred, this, [this, process](QProcess::ProcessError) {
+    if (diagnostic_ != process) return;
+    diagnosticResult_->setText("Ошибка запуска диагностики: " + process->errorString() +
+                               "\\nПроверьте права raw socket и отсутствие другого EtherCAT-мастера.");
+  });
+  process->start();
+}
+
+void MainWindow::finishReadOnlyDiagnostic() {
+  if (!diagnostic_) return;
+  const QString raw = QString::fromUtf8(diagnostic_->readAllStandardOutput());
+  const QString err = QString::fromUtf8(diagnostic_->readAllStandardError());
+  QString result = "РЕАЛЬНЫЙ SDO-СНИМОК (не циклическая OP-телеметрия)\\n";
+  if (diagnostic_->exitStatus() != QProcess::NormalExit || diagnostic_->exitCode() != 0) {
+    result += "Диагностика не завершилась успешно; данные не считаются подтверждёнными.\\n";
+    result += (err + "\\n" + raw).right(1000);
+  } else {
+    const QStringList lines = raw.split('\\n');
+    for (const QString &line : lines) {
+      const QString trimmed = line.trimmed();
+      if (trimmed.startsWith("state:") || trimmed.startsWith("vendor_id:") ||
+          trimmed.startsWith("product_code:") || trimmed.startsWith("revision:") ||
+          trimmed.startsWith("Error Code 0x603F:") ||
+          trimmed.startsWith("Status Word 0x6041:") ||
+          trimmed.startsWith("Actual position 0x6064:") ||
+          trimmed.startsWith("Actual velocity 0x606c:", Qt::CaseInsensitive) ||
+          trimmed.startsWith("Actual torque 0x6077:") ||
+          trimmed.startsWith("Mode display 0x6061:")) {
+        result += trimmed + "\\n";
+      }
+    }
+    result += "Мастер завершён. Двигатель не включался. WKC/OP в этом режиме не измеряются.";
+  }
+  diagnosticResult_->setText(result);
+  diagnoseButton_->setEnabled(true);
+  diagnostic_->deleteLater();
+  diagnostic_ = nullptr;
 }
