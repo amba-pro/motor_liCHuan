@@ -1,5 +1,6 @@
 #include "demo_plant.hpp"
 #include "motion_validator.hpp"
+#include "motion_readiness.hpp"
 #include "safety_gate.hpp"
 
 #include <QtTest>
@@ -16,6 +17,8 @@ class LogicTest : public QObject {
   void velocityModeIsNotOperational();
   void demoMoveStaysInsideTheEnvelope();
   void demoNeverLooksLikeTheDrive();
+  void failedRealtimeAcceptanceBlocksMovement();
+  void allReadinessEvidenceMustBePresent();
 };
 
 void LogicTest::safetyKeepsRealMotionClosed() {
@@ -78,6 +81,35 @@ void LogicTest::demoNeverLooksLikeTheDrive() {
   QVERIFY(snap.demonstration);
   QVERIFY(!snap.realConnected);
   QVERIFY(!snap.enabled);
+}
+
+void LogicTest::failedRealtimeAcceptanceBlocksMovement() {
+  MotionReadiness r;
+  r.hardwareEstopTested = r.motorFixtureVerified = r.shaftClear = true;
+  r.brakeCircuitVerified = r.physicalLimitsVerified = r.operatorPresent = true;
+  r.ethercatOp = r.driveFaultFree = r.cspModeConfirmed = true;
+  r.stationaryHoldVerified = r.watchdogStopVerified = true;
+  r.testedCycles = 30000;
+  r.missedDeadlines = 2;
+  r.maxWakeLatenessNs = 1780296;
+  QVERIFY(!motionBlockers(r).empty());
+}
+
+void LogicTest::allReadinessEvidenceMustBePresent() {
+  MotionReadiness r;
+  QVERIFY(!motionBlockers(r).empty());
+  r.hardwareEstopTested = r.motorFixtureVerified = r.shaftClear = true;
+  r.brakeCircuitVerified = r.physicalLimitsVerified = r.operatorPresent = true;
+  r.ethercatOp = r.driveFaultFree = r.cspModeConfirmed = true;
+  r.stationaryHoldVerified = r.watchdogStopVerified = true;
+  r.testedCycles = 30000;
+  r.maxWakeLatenessNs = 0;
+  QVERIFY(motionBlockers(r).empty());
+  r.testedCycles = 29999;
+  QVERIFY(!motionBlockers(r).empty());
+  r.testedCycles = 30000;
+  r.badWorkingCounters = 1;
+  QVERIFY(!motionBlockers(r).empty());
 }
 
 QTEST_GUILESS_MAIN(LogicTest)
