@@ -32,6 +32,10 @@ void WindowTest::demoWindowShowsOneRealAxisAndBlocksVelocity() {
   auto *velocity = window.findChild<QPushButton *>("velocityStartButton");
   QVERIFY(velocity != nullptr);
   QVERIFY(!velocity->isEnabled());
+  auto *readOnly = window.findChild<QPushButton *>("readOnlyDiagnosticButton");
+  QVERIFY(readOnly != nullptr);
+  QVERIFY(readOnly->isEnabled());
+  QVERIFY(window.findChild<QLabel *>("readOnlyDiagnosticResult") != nullptr);
   QVERIFY(window.realBlockText().contains("не отправлена"));
   auto *pages = window.findChild<QTabWidget *>("pages");
   QVERIFY(pages != nullptr);
