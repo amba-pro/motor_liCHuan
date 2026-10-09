@@ -1,4 +1,4 @@
-find_package(Qt6 REQUIRED COMPONENTS Widgets Charts Test)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Charts Test Network)
 
 set(CMAKE_AUTOMOC ON)
 
@@ -6,9 +6,10 @@ add_library(lc_motion STATIC
   src/safety_gate.cpp
   src/motion_validator.cpp
   src/demo_plant.cpp
+  src/live_telemetry.cpp
 )
 target_include_directories(lc_motion PUBLIC src)
-target_link_libraries(lc_motion PUBLIC pthread)
+target_link_libraries(lc_motion PUBLIC pthread Qt6::Network)
 
 add_library(lc_widgets STATIC
   src/mainwindow.cpp
@@ -28,3 +29,8 @@ add_executable(lc_ui_window_test tests/test_window.cpp)
 target_link_libraries(lc_ui_window_test PRIVATE Qt6::Test lc_widgets)
 add_test(NAME lc_ui_window COMMAND lc_ui_window_test)
 set_tests_properties(lc_ui_window PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+
+add_executable(lc_ui_telemetry_test tests/test_live_telemetry.cpp)
+target_link_libraries(lc_ui_telemetry_test PRIVATE Qt6::Test lc_motion)
+add_test(NAME lc_ui_telemetry COMMAND lc_ui_telemetry_test)
