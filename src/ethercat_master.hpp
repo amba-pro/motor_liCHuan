@@ -69,8 +69,10 @@ class EthercatMaster {
 
  private:
   std::string drainErrors() const;
+  void releaseLock();
 
   bool open_ = false;
+  int lock_fd_ = -1;
   bool mapped_ = false;
   std::string ifname_;
   int expected_wkc_ = 0;

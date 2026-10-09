@@ -4,6 +4,7 @@
 #include "safety_gate.hpp"
 
 #include <QMainWindow>
+#include <QStringList>
 
 class ChartPanel;
 class QDoubleSpinBox;
@@ -20,6 +21,8 @@ class MainWindow : public QMainWindow {
   ~MainWindow() override;
 
   QString realBlockText() const;
+  // Starts one diagnostic process without a dialog. A second call does nothing while the first runs.
+  void launchDiagnosticForTest(const QString &program, const QStringList &args, int timeoutMs);
 
  protected:
   void closeEvent(QCloseEvent *event) override;
@@ -31,7 +34,9 @@ class MainWindow : public QMainWindow {
   void confirmDemoMove();
   void showRealBlocked();
   void startReadOnlyDiagnostic();
+  void launchDiagnostic(const QString &program, const QStringList &args, int timeoutMs);
   void finishReadOnlyDiagnostic();
+  void stopDiagnostic();
 
   SafetyGate gate_;
   DemoPlant plant_;

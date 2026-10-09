@@ -4,6 +4,10 @@ extern "C" {
 #include "ethercat.h"
 }
 
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
+
 #include <cstring>
 
 EthercatMaster::~EthercatMaster() { close(); }
@@ -16,10 +20,35 @@ std::string EthercatMaster::drainErrors() const {
   return text;
 }
 
+void EthercatMaster::releaseLock() {
+  if (lock_fd_ < 0) return;
+  ::flock(lock_fd_, LOCK_UN);
+  ::close(lock_fd_);
+  lock_fd_ = -1;
+}
+
 bool EthercatMaster::open(const std::string &ifname, std::string &err) {
   if (open_) close();
+  releaseLock();
+  if (ifname.empty() || ifname.find('/') != std::string::npos) {
+    err = "invalid interface name";
+    return false;
+  }
+  const std::string lock_path = "/tmp/lichuan-ethercat-" + ifname + ".lock";
+  const int fd = ::open(lock_path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0644);
+  if (fd < 0) {
+    err = "cannot create EtherCAT master lock for " + ifname;
+    return false;
+  }
+  if (::flock(fd, LOCK_EX | LOCK_NB) != 0) {
+    ::close(fd);
+    err = "another EtherCAT master already holds " + ifname;
+    return false;
+  }
+  lock_fd_ = fd;
   if (!ec_init(ifname.c_str())) {
-    err = "ec_init failed on " + ifname + " (raw socket requires root)";
+    err = "ec_init failed on " + ifname + " (raw socket requires root or CAP_NET_RAW on this binary)";
+    releaseLock();
     return false;
   }
   open_ = true;
@@ -29,13 +58,15 @@ bool EthercatMaster::open(const std::string &ifname, std::string &err) {
 }
 
 void EthercatMaster::close() {
-  if (!open_) return;
-  ec_slave[0].state = EC_STATE_INIT;
-  ec_writestate(0);
-  ec_close();
-  open_ = false;
-  mapped_ = false;
-  expected_wkc_ = 0;
+  if (open_) {
+    ec_slave[0].state = EC_STATE_INIT;
+    ec_writestate(0);
+    ec_close();
+    open_ = false;
+    mapped_ = false;
+    expected_wkc_ = 0;
+  }
+  releaseLock();
 }
 
 bool EthercatMaster::configurePreop(std::string &err) {
