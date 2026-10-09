@@ -22,5 +22,7 @@ inline QString industrialStyle() {
       "QLabel#positionValue { font-size: 34px; font-weight: 600; color: #f4f7f8; }"
       "QLabel#demoBanner { background: #3d3418; color: #f0d48a; padding: 8px 12px; }"
       "QLabel#estopWarning { color: #f0d48a; }"
-      "QLabel#brakeState { color: #f0d48a; }");
+      "QLabel#brakeState { color: #f0d48a; }"
+      "QLabel#readOnlyDiagnosticResult { background: #10161b; color: #d5dde4; "
+      "border: 1px solid #3d4e5a; padding: 8px; }");
 }

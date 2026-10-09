@@ -1,10 +1,16 @@
 #include "mainwindow.hpp"
 
 #include "chart_panel.hpp"
+#include "diagnostic_report.hpp"
 #include "machine.hpp"
 #include "motion_validator.hpp"
 
 #include <QCloseEvent>
+#include <QCoreApplication>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QProcess>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QFrame>
@@ -47,6 +53,25 @@ QDoubleSpinBox *spin(double min, double max, double value, int decimals, const Q
   return box;
 }
 
+bool anotherMasterRunning() {
+  const QDir proc(QStringLiteral("/proc"));
+  const QStringList names = {QStringLiteral("lc_e_diag"), QStringLiteral("lc_e_control"),
+                             QStringLiteral("lc_e_op_disabled"), QStringLiteral("lc_e_csp_hold"),
+                             QStringLiteral("lc_e_csp_enable")};
+  for (const QString &entry : proc.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+    bool numeric = false;
+    entry.toInt(&numeric);
+    if (!numeric) continue;
+    QFile command(QStringLiteral("/proc/") + entry + QStringLiteral("/cmdline"));
+    if (!command.open(QIODevice::ReadOnly)) continue;
+    const QString text = QString::fromUtf8(command.readAll()).replace(QLatin1Char('\0'), QLatin1Char(' '));
+    for (const QString &name : names) {
+      if (text.contains(name)) return true;
+    }
+  }
+  return false;
+}
+
 }  // namespace
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
@@ -61,9 +86,13 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   refresh();
 }
 
-MainWindow::~MainWindow() { plant_.shutdown(); }
+MainWindow::~MainWindow() {
+  stopDiagnostic();
+  plant_.shutdown();
+}
 
 void MainWindow::closeEvent(QCloseEvent *event) {
+  stopDiagnostic();
   plant_.shutdown();
   QMainWindow::closeEvent(event);
 }
@@ -237,6 +266,15 @@ void MainWindow::build() {
   diag->setObjectName("diagnosticsText");
   diag->setWordWrap(true);
   diagLayout->addWidget(diag);
+  diagnoseButton_ = new QPushButton("Считать реальные параметры (SDO, без включения)", diagnostics);
+  diagnoseButton_->setObjectName("readOnlyDiagnosticButton");
+  diagLayout->addWidget(diagnoseButton_);
+  diagnosticResult_ = new QLabel("Снимок не получен. Подключение к EtherCAT отсутствует.", diagnostics);
+  diagnosticResult_->setObjectName("readOnlyDiagnosticResult");
+  diagnosticResult_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+  diagnosticResult_->setWordWrap(true);
+  diagLayout->addWidget(diagnosticResult_);
+  connect(diagnoseButton_, &QPushButton::clicked, this, &MainWindow::startReadOnlyDiagnostic);
   diagLayout->addStretch();
   tabs->addTab(diagnostics, "Диагностика");
 
@@ -293,4 +331,94 @@ void MainWindow::confirmDemoMove() {
 
 void MainWindow::showRealBlocked() {
   QMessageBox::warning(this, "Заблокировано", realBlockText());
+}
+
+void MainWindow::stopDiagnostic() {
+  if (!diagnostic_) return;
+  QProcess *process = diagnostic_;
+  diagnostic_ = nullptr;
+  process->disconnect(this);
+  if (process->state() != QProcess::NotRunning) {
+    process->kill();
+    process->waitForFinished(3000);
+  }
+  process->deleteLater();
+  if (diagnoseButton_) diagnoseButton_->setEnabled(true);
+}
+
+void MainWindow::launchDiagnosticForTest(const QString &program, const QStringList &args, int timeoutMs) {
+  launchDiagnostic(program, args, timeoutMs);
+}
+
+void MainWindow::startReadOnlyDiagnostic() {
+  // lc_e_diag is the existing read-only SDO tool. Never launch an enabled or cyclic motion master here.
+  if (diagnostic_ && diagnostic_->state() != QProcess::NotRunning) return;
+  const QString executable =
+      QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(QStringLiteral("../lc_e_diag"));
+  if (!QFileInfo(executable).isExecutable()) {
+    diagnosticResult_->setText(QStringLiteral("Ошибка: lc_e_diag не найден. Сначала соберите проект через CMake."));
+    return;
+  }
+  if (anotherMasterRunning()) {
+    diagnosticResult_->setText(QStringLiteral(
+        "Другой EtherCAT-мастер уже запущен. Снимок не начат, второй сокет не открывается."));
+    return;
+  }
+  const auto answer = QMessageBox::question(
+      this, QStringLiteral("Только чтение"),
+      QStringLiteral("Другой EtherCAT-мастер на enp37s0 должен быть остановлен.\n"
+                     "Будет запущен отдельный кратковременный SDO-сеанс без включения двигателя. Продолжить?"));
+  if (answer != QMessageBox::Yes) return;
+  launchDiagnostic(executable, {QStringLiteral("--if"), QStringLiteral("enp37s0")}, 15000);
+}
+
+void MainWindow::launchDiagnostic(const QString &program, const QStringList &args, int timeoutMs) {
+  if (diagnostic_ && diagnostic_->state() != QProcess::NotRunning) return;
+  if (anotherMasterRunning()) {
+    diagnosticResult_->setText(QStringLiteral(
+        "Другой EtherCAT-мастер уже запущен. Снимок не начат, второй сокет не открывается."));
+    return;
+  }
+  if (!QFileInfo(program).isExecutable()) {
+    diagnosticResult_->setText(QStringLiteral("Ошибка запуска диагностики: программа не найдена."));
+    return;
+  }
+  diagnostic_ = new QProcess(this);
+  diagnostic_->setProgram(program);
+  diagnostic_->setArguments(args);
+  diagnoseButton_->setEnabled(false);
+  diagnosticResult_->setText(QStringLiteral(
+      "Чтение SDO… Это отдельный кратковременный сеанс, не EtherCAT OP и не живой график."));
+  QProcess *const process = diagnostic_;
+  connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this,
+          [this, process](int, QProcess::ExitStatus) {
+            if (diagnostic_ != process) return;
+            finishReadOnlyDiagnostic();
+          });
+  connect(process, &QProcess::errorOccurred, this, [this, process](QProcess::ProcessError error) {
+    if (diagnostic_ != process || error != QProcess::FailedToStart) return;
+    diagnosticResult_->setText(QStringLiteral("Ошибка запуска диагностики: ") + process->errorString() +
+                               QStringLiteral("\nПроверьте права raw socket и отсутствие другого EtherCAT-мастера."));
+    diagnoseButton_->setEnabled(true);
+    diagnostic_ = nullptr;
+    process->deleteLater();
+  });
+  process->start();
+  QTimer::singleShot(timeoutMs, process, [process] {
+    if (process->state() != QProcess::NotRunning) process->kill();
+  });
+}
+
+void MainWindow::finishReadOnlyDiagnostic() {
+  if (!diagnostic_) return;
+  const QString raw = QString::fromUtf8(diagnostic_->readAllStandardOutput());
+  const QString err = QString::fromUtf8(diagnostic_->readAllStandardError());
+  const bool normal = diagnostic_->exitStatus() == QProcess::NormalExit;
+  const int code = diagnostic_->exitCode();
+  // lc_e_diag returns 3 when SDOs were read but 0x608F did not confirm scaling.
+  const bool success = normal && (code == 0 || code == 3);
+  diagnosticResult_->setText(formatDiagnosticReport(raw, err, success, normal && code == 3));
+  diagnoseButton_->setEnabled(true);
+  diagnostic_->deleteLater();
+  diagnostic_ = nullptr;
 }
