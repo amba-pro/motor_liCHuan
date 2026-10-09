@@ -9,6 +9,8 @@ class ChartPanel;
 class QDoubleSpinBox;
 class QLabel;
 class QTimer;
+class QProcess;
+class QPushButton;
 
 class MainWindow : public QMainWindow {
   Q_OBJECT
@@ -28,10 +30,15 @@ class MainWindow : public QMainWindow {
   void confirmDemoEnable();
   void confirmDemoMove();
   void showRealBlocked();
+  void startReadOnlyDiagnostic();
+  void finishReadOnlyDiagnostic();
 
   SafetyGate gate_;
   DemoPlant plant_;
   QTimer *poll_ = nullptr;
+  QProcess *diagnostic_ = nullptr;
+  QPushButton *diagnoseButton_ = nullptr;
+  QLabel *diagnosticResult_ = nullptr;
   ChartPanel *charts_ = nullptr;
   double chartTime_ = 0.0;
 
