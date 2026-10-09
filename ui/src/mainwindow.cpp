@@ -24,6 +24,9 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QScrollArea>
+#include <QSignalBlocker>
+#include <QSizePolicy>
 #include <QTabWidget>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -242,6 +245,7 @@ void MainWindow::build() {
   angleDial->setRange(0, 359);
   angleDial->setWrapping(true);
   angleDial->setNotchesVisible(true);
+  angleDial->setMinimumSize(120, 120);
   angleDial->setValue(0);
   auto *angleSpin = spin(0, 359.99, 0, 2, "angle360Spin");
   angleSpin->setSuffix("°");
@@ -255,12 +259,15 @@ void MainWindow::build() {
   targetPreview->setObjectName("targetAnglePreview");
   targetPreview->setWordWrap(true);
   connect(angleDial, &QDial::valueChanged, angleSpin, [angleSpin](int value) {
+    if (static_cast<int>(std::floor(angleSpin->value())) == value) return;
     angleSpin->setValue(static_cast<double>(value));
   });
   connect(angleSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
           angleDial, [angleDial](double value) {
     const int wholeDegrees = static_cast<int>(std::floor(value));
-    if (angleDial->value() != wholeDegrees) angleDial->setValue(wholeDegrees);
+    if (angleDial->value() == wholeDegrees) return;
+    const QSignalBlocker blocker(angleDial);
+    angleDial->setValue(wholeDegrees);
   });
   connect(angleSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
           targetPreview, [targetPreview](double angle) {
@@ -282,10 +289,21 @@ void MainWindow::build() {
   angleLayout->addWidget(rpmLabel);
   angleLayout->addWidget(rpmSlider);
   angleLayout->addWidget(targetPreview);
-  angleLayout->addWidget(new QLabel("0–360° — выбор целевого угла, НЕ разрешённый диапазон движения. "
-                                    "До готовности CSP-контроллера пуск реального двигателя запрещён."));
+  auto *angleLimit = new QLabel("0–360° — выбор целевого угла, НЕ разрешённый диапазон движения. "
+                                "До готовности CSP-контроллера пуск реального двигателя запрещён.",
+                                anglePanel);
+  angleLimit->setWordWrap(true);
+  angleLayout->addWidget(angleLimit);
   form->addRow(anglePanel);
-  motionLayout->addWidget(formBox, 1);
+  formBox->setMinimumHeight(formBox->sizeHint().height());
+  auto *scroll = new QScrollArea(motion);
+  scroll->setObjectName("positionScroll");
+  scroll->setWidgetResizable(true);
+  scroll->setFrameShape(QFrame::NoFrame);
+  scroll->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+  scroll->setMinimumHeight(160);
+  scroll->setWidget(formBox);
+  motionLayout->addWidget(scroll, 1);
 
   auto *buttons = new QGroupBox("Команды");
   auto *buttonLayout = new QVBoxLayout(buttons);

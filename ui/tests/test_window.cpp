@@ -131,6 +131,9 @@ void WindowTest::fullTurnSetpointsNeverStartMotor() {
   QVERIFY(angle && dial && rpm && label);
   angle->setValue(270.0);
   QCOMPARE(dial->value(), 270);
+  angle->setValue(359.99);
+  QCOMPARE(angle->value(), 359.99);
+  QCOMPARE(dial->value(), 359);
   dial->setValue(90);
   QCOMPARE(angle->value(), 90.0);
   rpm->setValue(25);
