@@ -53,7 +53,7 @@ target_link_libraries(lc_e_csp_enable PRIVATE lc_e_core)
 
 install(TARGETS lc_e_diag lc_e_control RUNTIME DESTINATION bin)
 
-find_package(Qt6 QUIET COMPONENTS Widgets Charts Test)
+find_package(Qt6 QUIET COMPONENTS Widgets Charts Test Network)
 if(Qt6_FOUND)
   enable_testing()
   add_subdirectory(ui)
