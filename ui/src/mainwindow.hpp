@@ -1,6 +1,7 @@
 #pragma once
 
 #include "demo_plant.hpp"
+#include "live_telemetry.hpp"
 #include "safety_gate.hpp"
 
 #include <QMainWindow>
@@ -40,6 +41,7 @@ class MainWindow : public QMainWindow {
 
   SafetyGate gate_;
   DemoPlant plant_;
+  LiveTelemetry live_;
   QTimer *poll_ = nullptr;
   QProcess *diagnostic_ = nullptr;
   QPushButton *diagnoseButton_ = nullptr;
@@ -47,6 +49,7 @@ class MainWindow : public QMainWindow {
   ChartPanel *charts_ = nullptr;
   double chartTime_ = 0.0;
 
+  QLabel *liveState_ = nullptr;
   QLabel *ethercatState_ = nullptr;
   QLabel *servoState_ = nullptr;
   QLabel *positionValue_ = nullptr;
