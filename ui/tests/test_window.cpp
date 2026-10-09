@@ -3,6 +3,8 @@
 
 #include <QApplication>
 #include <QDoubleSpinBox>
+#include <QDial>
+#include <QSlider>
 #include <QFrame>
 #include <QLabel>
 #include <QPushButton>
@@ -18,6 +20,7 @@ class WindowTest : public QObject {
   void diagnosticReportStaysSeparateFromDemoCards();
   void diagnosticFailureReenablesTheButton();
   void diagnosticTimeoutStopsTheProcess();
+  void fullTurnSetpointsNeverStartMotor();
 };
 
 void WindowTest::demoWindowShowsOneRealAxisAndBlocksVelocity() {
@@ -117,6 +120,26 @@ void WindowTest::diagnosticTimeoutStopsTheProcess() {
   QTRY_VERIFY_WITH_TIMEOUT(button->isEnabled(), 4000);
   QVERIFY(result->text().contains("не завершилась"));
   QVERIFY(!result->text().contains("Мастер завершён"));
+}
+
+void WindowTest::fullTurnSetpointsNeverStartMotor() {
+  MainWindow window;
+  auto *angle = window.findChild<QDoubleSpinBox *>("angle360Spin");
+  auto *dial = window.findChild<QDial *>("angle360Dial");
+  auto *rpm = window.findChild<QSlider *>("targetRpmSlider");
+  auto *label = window.findChild<QLabel *>("targetAnglePreview");
+  QVERIFY(angle && dial && rpm && label);
+  angle->setValue(270.0);
+  QCOMPARE(dial->value(), 270);
+  angle->setValue(359.99);
+  QCOMPARE(angle->value(), 359.99);
+  QCOMPARE(dial->value(), 359);
+  dial->setValue(90);
+  QCOMPARE(angle->value(), 90.0);
+  rpm->setValue(25);
+  QCOMPARE(window.findChild<QDoubleSpinBox *>("speedSpin")->value(), 2.5);
+  QVERIFY(label->text().contains("заблокирован"));
+  QVERIFY(!window.realBlockText().isEmpty());
 }
 
 int main(int argc, char **argv) {

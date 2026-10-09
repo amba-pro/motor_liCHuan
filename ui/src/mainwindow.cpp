@@ -12,6 +12,9 @@
 #include <QFileInfo>
 #include <QProcess>
 #include <QDoubleSpinBox>
+#include <QDial>
+#include <QSlider>
+#include <cmath>
 #include <QFormLayout>
 #include <QFrame>
 #include <QGridLayout>
@@ -21,6 +24,9 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QScrollArea>
+#include <QSignalBlocker>
+#include <QSizePolicy>
 #include <QTabWidget>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -230,7 +236,74 @@ void MainWindow::build() {
   form->addRow("Разгон, об/мин/с", accelSpin_);
   form->addRow("Торможение, об/мин/с", decelSpin_);
   form->addRow("Рывок, об/мин/с²", jerkSpin_);
-  motionLayout->addWidget(formBox, 1);
+  // Operator setpoint for a complete shaft revolution. Selection does not
+  // produce a motor command: a full-revolution planner has not been validated.
+  auto *anglePanel = new QGroupBox("Целевой угол в пределах оборота — задание", formBox);
+  auto *angleLayout = new QVBoxLayout(anglePanel);
+  auto *angleDial = new QDial(anglePanel);
+  angleDial->setObjectName("angle360Dial");
+  angleDial->setRange(0, 359);
+  angleDial->setWrapping(true);
+  angleDial->setNotchesVisible(true);
+  angleDial->setMinimumSize(120, 120);
+  angleDial->setValue(0);
+  auto *angleSpin = spin(0, 359.99, 0, 2, "angle360Spin");
+  angleSpin->setSuffix("°");
+  auto *rpmSlider = new QSlider(Qt::Horizontal, anglePanel);
+  rpmSlider->setObjectName("targetRpmSlider");
+  rpmSlider->setRange(1, 50);  // 0.1–5.0 rpm, within known commissioning ceiling
+  rpmSlider->setValue(50);
+  auto *rpmLabel = new QLabel("Скорость задания: 5.0 об/мин", anglePanel);
+  rpmLabel->setObjectName("targetRpmLabel");
+  auto *targetPreview = new QLabel("Выбран угол 0°. Команда на привод не отправлена.", anglePanel);
+  targetPreview->setObjectName("targetAnglePreview");
+  targetPreview->setWordWrap(true);
+  connect(angleDial, &QDial::valueChanged, angleSpin, [angleSpin](int value) {
+    if (static_cast<int>(std::floor(angleSpin->value())) == value) return;
+    angleSpin->setValue(static_cast<double>(value));
+  });
+  connect(angleSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+          angleDial, [angleDial](double value) {
+    const int wholeDegrees = static_cast<int>(std::floor(value));
+    if (angleDial->value() == wholeDegrees) return;
+    const QSignalBlocker blocker(angleDial);
+    angleDial->setValue(wholeDegrees);
+  });
+  connect(angleSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+          targetPreview, [targetPreview](double angle) {
+    targetPreview->setText(QString("Выбран угол %1°. Физический поворот пока заблокирован.")
+                           .arg(angle, 0, 'f', 2));
+  });
+  connect(rpmSlider, &QSlider::valueChanged, this,
+          [this, rpmLabel](int tenths) {
+    const double rpm = tenths / 10.0;
+    speedSpin_->setValue(rpm);
+    rpmLabel->setText(QString("Скорость задания: %1 об/мин").arg(rpm, 0, 'f', 1));
+  });
+  connect(speedSpin_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+          rpmSlider, [rpmSlider](double rpm) {
+    rpmSlider->setValue(static_cast<int>(std::round(rpm * 10.0)));
+  });
+  angleLayout->addWidget(angleDial, 0, Qt::AlignHCenter);
+  angleLayout->addWidget(angleSpin);
+  angleLayout->addWidget(rpmLabel);
+  angleLayout->addWidget(rpmSlider);
+  angleLayout->addWidget(targetPreview);
+  auto *angleLimit = new QLabel("0–360° — выбор целевого угла, НЕ разрешённый диапазон движения. "
+                                "До готовности CSP-контроллера пуск реального двигателя запрещён.",
+                                anglePanel);
+  angleLimit->setWordWrap(true);
+  angleLayout->addWidget(angleLimit);
+  form->addRow(anglePanel);
+  formBox->setMinimumHeight(formBox->sizeHint().height());
+  auto *scroll = new QScrollArea(motion);
+  scroll->setObjectName("positionScroll");
+  scroll->setWidgetResizable(true);
+  scroll->setFrameShape(QFrame::NoFrame);
+  scroll->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+  scroll->setMinimumHeight(160);
+  scroll->setWidget(formBox);
+  motionLayout->addWidget(scroll, 1);
 
   auto *buttons = new QGroupBox("Команды");
   auto *buttonLayout = new QVBoxLayout(buttons);
