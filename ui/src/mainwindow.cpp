@@ -110,6 +110,10 @@ void MainWindow::build() {
   banner->setObjectName("demoBanner");
   banner->setWordWrap(true);
   root->addWidget(banner);
+  liveState_ = new QLabel("Реальная телеметрия: нет подключения", this);
+  liveState_->setObjectName("liveTelemetryStatus");
+  root->addWidget(liveState_);
+  live_.connectToLocalService("lichuan-telemetry-v1");
 
   auto *statusPanel = new QGridLayout;
   statusPanel->setHorizontalSpacing(12);
@@ -284,7 +288,22 @@ void MainWindow::build() {
 
 void MainWindow::refresh() {
   const PlantSnapshot snap = plant_.snapshot();
-  ethercatState_->setText("Нет соединения");
+  if (live_.fresh()) {
+    const LiveSnapshot &telemetry = live_.snapshot();
+    const double degrees = static_cast<double>(telemetry.positionCounts) * 360.0 / 8388608.0;
+    const double rpm = static_cast<double>(telemetry.velocityCountsPerSecond) * 60.0 / 8388608.0;
+    liveState_->setText(QString("РЕАЛЬНЫЕ ДАННЫЕ / только чтение: положение %1°, скорость %2 об/мин, момент %3 %%, ошибка слежения %4 отсчётов, 0x6041=%5, 0x603F=%6, WKC=%7, OP=%8")
+        .arg(degrees, 0, 'f', 4).arg(rpm, 0, 'f', 3)
+        .arg(static_cast<double>(telemetry.torqueRaw) / 10.0, 0, 'f', 1)
+        .arg(telemetry.followingCounts)
+        .arg(telemetry.statusword, 4, 16, QChar('0'))
+        .arg(telemetry.errorCode, 4, 16, QChar('0'))
+        .arg(telemetry.wkc)
+        .arg(telemetry.operational ? "ДА" : "НЕТ"));
+  } else {
+    liveState_->setText("Реальная телеметрия недоступна или устарела. " + live_.problem());
+  }
+  ethercatState_->setText("Нет соединения (демо)");
   servoState_->setText(QString::fromStdString(snap.cia402));
   positionValue_->setText(QString::number(snap.positionDeg, 'f', 4));
   velocityValue_->setText(QString::number(snap.velocityRpm, 'f', 3));
