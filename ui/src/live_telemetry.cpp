@@ -3,6 +3,9 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QtGlobal>
+#include <cstdint>
+#include <climits>
 
 namespace {
 constexpr int kMaxLine = 4096;
