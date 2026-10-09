@@ -3,6 +3,7 @@
 // after a command that carries every authorization flag. Nothing is armed at startup.
 
 #include "csp_machine.hpp"
+#include "fault_policy.hpp"
 #include "ethercat_master.hpp"
 #include "motion_protocol.hpp"
 #include "rt_setup.hpp"
@@ -141,11 +142,28 @@ struct Shared {
   bool fresh = false;
   bool deadline_clear = false;
   bool faulted = false;
+  bool fault_recovered = false;
+  bool ack_request = false;
+  uint64_t ack_id = 0;
   bool servo = false;
   bool busy = false;
   uint64_t last_id = 0;
   std::chrono::steady_clock::time_point sample_at{};
 };
+
+void copy_fault(Shared &shared, const csp::FaultRecord &faults) {
+  shared.faulted = csp::blocks_enable(faults.kind);
+  shared.fault_recovered = faults.kind == csp::FaultKind::Acknowledgement;
+}
+
+void fill_fault(TelemetryFrame &frame, const csp::FaultRecord &faults, bool deadline_clear) {
+  frame.fault_known = true;
+  frame.startup_status = faults.startup_status;
+  frame.startup_error = faults.startup_error;
+  frame.fault_class = static_cast<uint8_t>(faults.kind);
+  frame.fault_blocks = csp::blocks_enable(faults.kind);
+  frame.deadline_clear = deadline_clear;
+}
 
 void push_result(Shared &shared, uint64_t id, bool ok, const std::string &reason) {
   if (id == 0) return;
@@ -264,6 +282,7 @@ void command_loop(Shared &shared, int listen_fd, std::atomic<bool> &run) {
           gate.telemetry_fresh = shared.fresh && age <= std::chrono::milliseconds(motion::kStaleTelemetryMs);
           gate.deadline_clear = shared.deadline_clear;
           gate.faulted = shared.faulted;
+          gate.fault_recovered = shared.fault_recovered;
           gate.servo_enabled = shared.servo;
           gate.last_id = shared.last_id;
           const motion::Decision decision = motion::admit(command, gate);
@@ -298,6 +317,11 @@ void command_loop(Shared &shared, int listen_fd, std::atomic<bool> &run) {
               shared.busy = true;
               reply = motion::ack_line(command.id, "accepted", "");
             }
+          } else if (command.op == motion::Op::Acknowledge) {
+            shared.ack_request = true;
+            shared.ack_id = command.id;
+            shared.last_id = command.id;
+            reply = motion::ack_line(command.id, "accepted", "");
           } else {
             shared.job = true;
             shared.job_op = motion::Op::Enable;
@@ -415,9 +439,13 @@ int main(int argc, char **argv) {
   std::cout << "PREOP status 0x" << std::hex << status_before << std::dec << " position " << position
             << " velocity " << velocity << " error " << error_code << "\n";
   std::cout << "fault reset: not sent\n";
-  const bool preop_faulted = csp::faulted(status_before);
-  if (preop_faulted) {
-    std::cout << "PREOP status is Fault. It is not cleared. Enable stays blocked.\n";
+  csp::FaultRecord faults;
+  csp::note_startup(faults, status_before, error_code);
+  if (csp::documented_fault_status(status_before) || error_code != 0) {
+    std::cout << "PREOP status is a documented fault. It is not cleared. Enable stays blocked.\n";
+  } else if (csp::faulted(status_before)) {
+    std::cout << "PREOP status matches the CiA402 fault mask. It is not the documented fault word 0x0218. "
+                 "Enable stays blocked until the cyclic state is 0x0250 with error 0. Fault reset is not sent.\n";
   }
   if (rx_assign != 0x1702 || tx_assign != 0x1B02 || error_code != 0 || velocity != 0 || sync_type > 1) {
     std::cerr << "BLOCKED: PDO assignment, velocity, error code, or sync type\n";
@@ -499,6 +527,7 @@ int main(int argc, char **argv) {
     shared.operational = true;
   }
   std::cout << "service ready, servo disabled, motion not started\n";
+  bool told_history = false;
 
   while (!g_exit || axis.phase != csp::Phase::Idle || axis.servo_enabled || prep_left > 0) {
     bool stop = false;
@@ -549,6 +578,8 @@ int main(int argc, char **argv) {
         frame.error = sample.error;
         frame.wkc = sample.wkc;
         frame.enabled = false;
+        csp::note_cyclic(faults, sample.status, sample.error, true);
+        fill_fault(frame, faults, sample.late_ns <= rt::kLateLimitNs);
         telemetry.publish(frame);
         if (shared.mu.try_lock()) {
           shared.position = sample.position;
@@ -557,7 +588,7 @@ int main(int argc, char **argv) {
           shared.wkc = sample.wkc;
           shared.fresh = true;
           shared.deadline_clear = sample.late_ns <= rt::kLateLimitNs;
-          shared.faulted = preop_faulted || sample.error != 0 || csp::faulted(sample.status);
+          copy_fault(shared, faults);
           shared.sample_at = std::chrono::steady_clock::now();
           shared.busy = true;
           shared.mu.unlock();
@@ -589,6 +620,32 @@ int main(int argc, char **argv) {
 
     const Sample sample = cycle.exchange();
     max_late = std::max(max_late, sample.late_ns);
+    csp::note_cyclic(faults, sample.status, sample.error, sample.ok);
+    if (!told_history && faults.kind == csp::FaultKind::Historical) {
+      std::cout << "PREOP fault mask is historical. Current status is the documented no-fault state. "
+                   "Fault reset was not sent.\n";
+      told_history = true;
+    }
+    bool ack_now = false;
+    uint64_t ack_id = 0;
+    if (shared.mu.try_lock()) {
+      if (shared.ack_request) {
+        ack_now = true;
+        ack_id = shared.ack_id;
+        shared.ack_request = false;
+      }
+      shared.mu.unlock();
+    }
+    if (ack_now) {
+      const bool ok = csp::acknowledge(faults, sample.status, sample.error, sample.ok);
+      const char *reason = "acknowledged; fault reset was not sent";
+      if (!ok) {
+        reason = sample.ok ? "drive fault is present; it is not cleared automatically"
+                           : "telemetry or EtherCAT communication is not valid";
+      }
+      std::lock_guard<std::mutex> lock(shared.mu);
+      push_result(shared, ack_id, ok, reason);
+    }
     csp::Feedback fb;
     fb.wkc_ok = sample.ok;
     fb.deadline_miss = sample.ok && sample.late_ns > rt::kLateLimitNs && axis.phase != csp::Phase::Idle;
@@ -626,6 +683,7 @@ int main(int argc, char **argv) {
       frame.error = sample.error;
       frame.wkc = sample.wkc;
       frame.enabled = csp::operation_enabled(sample.status);
+      fill_fault(frame, faults, sample.late_ns <= rt::kLateLimitNs);
       telemetry.publish(frame);
       if (frame.enabled) ever_enabled = true;
     }
@@ -636,7 +694,7 @@ int main(int argc, char **argv) {
       shared.wkc = sample.wkc;
       shared.fresh = sample.ok;
       shared.deadline_clear = sample.ok && sample.late_ns <= rt::kLateLimitNs;
-      shared.faulted = preop_faulted || (sample.ok && (sample.error != 0 || csp::faulted(sample.status)));
+      copy_fault(shared, faults);
       shared.servo = axis.servo_enabled;
       shared.busy = axis.phase != csp::Phase::Idle || prep_left > 0 || shared.job;
       shared.operational = true;

@@ -26,6 +26,7 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QStringList>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QRadioButton>
@@ -177,10 +178,50 @@ void MainWindow::closeEvent(QCloseEvent *event) {
   QMainWindow::closeEvent(event);
 }
 
-QString MainWindow::realBlockText() const {
-  QString text = "Реальная команда не отправлена. Мастер EtherCAT не запускается.\n";
-  for (const auto &line : gate_.blockers()) text += "\n• " + QString::fromStdString(line);
+QString MainWindow::enableBlockerText() const {
+  QStringList blockers;
+  QString note;
+  if (!live_.fresh()) {
+    blockers << QStringLiteral("Телеметрия не свежая, поэтому текущее состояние привода не подтверждено.");
+  } else {
+    const LiveSnapshot &sample = live_.snapshot();
+    if (!sample.operational) blockers << QStringLiteral("EtherCAT не в OP.");
+    if (sample.wkc != 3) blockers << QStringLiteral("WKC не равен 3.");
+    if (sample.deadlineKnown && !sample.deadlineClear) blockers << QStringLiteral("Последний цикл позже 250 мкс.");
+    if (sample.faultKnown && sample.faultClass == QLatin1String("historical")) {
+      note = QStringLiteral("Наблюдение PREOP 0x%1: маска Fault CiA402, не документированное слово 0x0218. "
+                            "Текущее 0x%2, код %3. Сброс не отправлялся.")
+                 .arg(sample.startupStatus, 4, 16, QChar('0'))
+                 .arg(sample.statusword, 4, 16, QChar('0'))
+                 .arg(sample.errorCode);
+    } else if (sample.faultKnown && sample.faultClass == QLatin1String("acknowledge")) {
+      blockers << QStringLiteral("Наблюдённая неисправность требует подтверждения оператора. Сброс не отправляется.");
+    } else if (sample.faultKnown && sample.faultClass == QLatin1String("active")) {
+      blockers << QStringLiteral("Активная неисправность: статус 0x%1, код %2. Сброс не отправляется.")
+                      .arg(sample.statusword, 4, 16, QChar('0'))
+                      .arg(sample.errorCode);
+    } else if ((sample.statusword & 0x004F) == 0x0008 || (sample.statusword & 0x004F) == 0x000F ||
+               sample.errorCode != 0) {
+      blockers << QStringLiteral("Активная неисправность: статус 0x%1, код %2. Сброс не отправляется.")
+                      .arg(sample.statusword, 4, 16, QChar('0'))
+                      .arg(sample.errorCode);
+    }
+  }
+  blockers << QStringLiteral("Остановка при потере связи на включённом приводе не подтверждена.");
+  blockers << QStringLiteral("Аппаратный аварийный останов не подтверждён.");
+  blockers << QStringLiteral("Приёмка 30 с реального времени не подтверждена.");
+  blockers << QStringLiteral(
+      "Крепление, свободный вал, холостой ход, внешний тормоз, присутствие оператора и конверт ±1° не подтверждены.");
+  QString text;
+  if (!note.isEmpty()) text += note + QStringLiteral("\n");
+  text += QStringLiteral("Включение серво заблокировано:");
+  for (const QString &line : blockers) text += QStringLiteral("\n• ") + line;
   return text;
+}
+
+QString MainWindow::realBlockText() const {
+  return QStringLiteral("Реальная команда не отправлена. Включение и движение этой строкой не выполняются.\n\n") +
+         enableBlockerText();
 }
 
 void MainWindow::build() {
@@ -193,6 +234,19 @@ void MainWindow::build() {
   liveState_ = new QLabel("Реальная телеметрия: нет подключения", this);
   liveState_->setObjectName("liveTelemetryStatus");
   root->addWidget(liveState_);
+  enableBlockers_ = new QLabel;
+  enableBlockers_->setObjectName("enableBlockersLabel");
+  enableBlockers_->setWordWrap(true);
+  enableBlockers_->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+  enableBlockers_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+  auto *blockerScroll = new QScrollArea(central);
+  blockerScroll->setObjectName("enableBlockersScroll");
+  blockerScroll->setWidgetResizable(true);
+  blockerScroll->setFrameShape(QFrame::StyledPanel);
+  blockerScroll->setMinimumHeight(108);
+  blockerScroll->setMaximumHeight(108);
+  blockerScroll->setWidget(enableBlockers_);
+  root->addWidget(blockerScroll);
   live_.connectToLocalService("lichuan-telemetry-v1");
 
   auto *statusPanel = new QGridLayout;
@@ -378,6 +432,7 @@ void MainWindow::build() {
   auto *realMove = new QPushButton("Движение к цели");
   auto *realStop = new QPushButton("Управляемый стоп");
   auto *realDisable = new QPushButton("Отключить серво");
+  auto *ackFault = new QPushButton("Подтвердить наблюдение неисправности");
   demoEnable->setObjectName("demoEnableButton");
   demoDisable->setObjectName("demoDisableButton");
   demoStart->setObjectName("demoStartButton");
@@ -387,6 +442,7 @@ void MainWindow::build() {
   realMove->setObjectName("realMoveButton");
   realStop->setObjectName("controlledStopButton");
   realDisable->setObjectName("disableServoButton");
+  ackFault->setObjectName("acknowledgeFaultButton");
   commandState_ = new QLabel("Команда на привод не отправлялась.", buttons);
   commandState_->setObjectName("commandStateLabel");
   commandState_->setWordWrap(true);
@@ -399,8 +455,9 @@ void MainWindow::build() {
   connect(realMove, &QPushButton::clicked, this, &MainWindow::requestMove);
   connect(realStop, &QPushButton::clicked, this, &MainWindow::requestStop);
   connect(realDisable, &QPushButton::clicked, this, &MainWindow::requestDisable);
-  for (QPushButton *button : {connectDrive, realEnable, realMove, realStop, realDisable, demoEnable, demoDisable,
-                              demoStart, demoStop}) {
+  connect(ackFault, &QPushButton::clicked, this, &MainWindow::requestFaultAck);
+  for (QPushButton *button : {connectDrive, realEnable, realMove, realStop, realDisable, ackFault, demoEnable,
+                              demoDisable, demoStart, demoStop}) {
     buttonLayout->addWidget(button);
   }
   buttonLayout->addWidget(commandState_);
@@ -461,7 +518,7 @@ void MainWindow::build() {
   liveGrid->addWidget(liveReadout("Код ошибки", "liveError", liveError_), 1, 2);
   liveGrid->addWidget(liveReadout("EtherCAT OP", "liveOp", liveOp_), 2, 0);
   liveGrid->addWidget(liveReadout("Рабочий счётчик", "liveWkc", liveWkc_), 2, 1);
-  liveGrid->addWidget(liveReadout("Связь", "liveHealth", liveState_), 2, 2);
+  liveGrid->addWidget(liveReadout("Связь", "liveHealth", liveHealth_), 2, 2);
   liveLayout->addLayout(liveGrid);
   liveCharts_ = new ChartPanel(livePage, false);
   liveCharts_->setObjectName("liveCharts");
@@ -501,12 +558,17 @@ void MainWindow::build() {
 
 void MainWindow::refresh() {
   updateMotionPlan();
+  if (enableBlockers_) enableBlockers_->setText(enableBlockerText());
   const PlantSnapshot snap = plant_.snapshot();
+  auto showLink = [this](const QString &text) {
+    if (liveState_) liveState_->setText(text);
+    if (liveHealth_) liveHealth_->setText(text);
+  };
   if (live_.fresh()) {
     const LiveSnapshot &telemetry = live_.snapshot();
     const double degrees = static_cast<double>(telemetry.positionCounts) * 360.0 / 8388608.0;
     const double rpm = static_cast<double>(telemetry.velocityCountsPerSecond) * 60.0 / 8388608.0;
-    liveState_->setText(QString("РЕАЛЬНЫЕ ДАННЫЕ / только чтение: положение %1°, скорость %2 об/мин, момент %3 %%, ошибка слежения %4 отсчётов, 0x6041=%5, 0x603F=%6, WKC=%7, OP=%8")
+    showLink(QString("РЕАЛЬНЫЕ ДАННЫЕ / только чтение: положение %1°, скорость %2 об/мин, момент %3 %%, ошибка слежения %4 отсчётов, 0x6041=%5, 0x603F=%6, WKC=%7, OP=%8")
         .arg(degrees, 0, 'f', 4).arg(rpm, 0, 'f', 3)
         .arg(static_cast<double>(telemetry.torqueRaw) / 10.0, 0, 'f', 1)
         .arg(telemetry.followingCounts)
@@ -515,7 +577,7 @@ void MainWindow::refresh() {
         .arg(telemetry.wkc)
         .arg(telemetry.operational ? "ДА" : "НЕТ"));
   } else {
-    liveState_->setText("Реальная телеметрия недоступна или устарела. " + live_.problem());
+    showLink("Реальная телеметрия недоступна или устарела. " + live_.problem());
   }
   ethercatState_->setText("Нет соединения (демо)");
   servoState_->setText(QString::fromStdString(snap.cia402));
@@ -535,7 +597,7 @@ void MainWindow::refresh() {
   if (!live_.fresh()) {
     showUnavailable({livePosition_, liveVelocity_, liveTorque_, liveFollowing_, liveStatus_, liveError_, liveOp_,
                      liveWkc_});
-    if (liveState_) liveState_->setText(live_.problem().isEmpty() ? "N/A" : live_.problem());
+    showLink(live_.problem().isEmpty() ? "N/A" : live_.problem());
     return;
   }
   const LiveSnapshot sample = live_.snapshot();
@@ -550,7 +612,7 @@ void MainWindow::refresh() {
   liveError_->setText(QString::number(sample.errorCode));
   liveOp_->setText(sample.operational ? "OP" : "не OP");
   liveWkc_->setText(QString::number(sample.wkc));
-  liveState_->setText(sample.enabled ? "свежие данные; серво включено на приводе" : "свежие данные PDO");
+  showLink(sample.enabled ? "свежие данные; серво включено на приводе" : "свежие данные PDO");
   if (liveCharts_) {
     liveCharts_->appendMeasured(liveTime_, countsToDegrees(sample.positionCounts), sample.velocityKnown,
                                 sample.velocityCountsPerSecond * 60.0 / kCountsPerRevolution,
@@ -719,6 +781,28 @@ QString flagLine(quint64 id, const QString &op, double degrees, double speed, do
          QStringLiteral(" mount=%1 shaft=%2 noload=%3 estop=%4 brake=%5 present=%6 envelope=%7 loss=%8 timing=%9")
              .arg(bit(mount), bit(shaft), bit(noload), bit(estop), bit(brake), bit(present), bit(envelope), bit(loss),
                   bit(timing));
+}
+
+QString flagLine(quint64 id, const QString &op, double degrees, double speed, double accel, double decel, bool mount,
+                 bool shaft, bool noload, bool estop, bool brake, bool present, bool envelope, bool loss, bool timing);
+
+void MainWindow::requestFaultAck() {
+  if (!commands_ || !commands_->connected() || !live_.fresh()) {
+    if (commandState_) {
+      commandState_->setText("Подтверждение не отправлено: нет канала или свежей телеметрии. Сброс не отправляется.");
+    }
+    return;
+  }
+  const LiveSnapshot &sample = live_.snapshot();
+  if (!sample.faultKnown || sample.faultClass != QLatin1String("acknowledge")) {
+    if (commandState_) commandState_->setText("Подтверждение не требуется. Сброс неисправности не отправляется.");
+    return;
+  }
+  commands_->sendLine(flagLine(++nextCommandId_, QStringLiteral("ackfault"), 0, speedSpin_->value(), accelSpin_->value(),
+                               decelSpin_->value(), false, false, false, false, false, false, false, false, false));
+  if (commandState_) {
+    commandState_->setText("Подтверждение наблюдения отправлено. Сброс не отправляется и серво не включается.");
+  }
 }
 
 void MainWindow::requestEnable() {

@@ -16,6 +16,12 @@ struct TelemetryFrame {
   uint16_t error = 0;
   int wkc = 0;
   bool enabled = false;
+  bool fault_known = false;
+  uint16_t startup_status = 0;
+  uint16_t startup_error = 0;
+  uint8_t fault_class = 0;
+  bool fault_blocks = false;
+  bool deadline_clear = false;
 };
 
 class TelemetryPublisher {

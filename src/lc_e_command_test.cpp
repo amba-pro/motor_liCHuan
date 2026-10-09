@@ -1,4 +1,5 @@
 #include "csp_machine.hpp"
+#include "fault_policy.hpp"
 #include "motion_protocol.hpp"
 
 #include <iostream>
@@ -153,6 +154,61 @@ int main() {
   expect(moving.hold == 110, "stop freezes the last setpoint");
   expect(!moving.consume_point, "stop does not take another point");
   require_word(moving, "stopped word");
+
+  expect(csp::faulted(0x0208) && (0x0208 & 0x004F) == 0x0008, "0x0208 is the CiA402 fault mask");
+  expect(!csp::documented_fault_status(0x0208), "0x0208 is not the documented fault word");
+  expect(csp::documented_fault_status(0x0218) && csp::documented_fault_status(0x021F), "documented fault words");
+  expect(csp::switch_on_disabled(0x0250) && csp::documented_no_fault(0x0250, 0), "0x0250 is switch on disabled");
+  expect(!csp::faulted(0x0250), "0x0250 is not a fault");
+
+  csp::FaultRecord startup;
+  csp::note_startup(startup, 0x0208, 0);
+  expect(startup.kind == csp::FaultKind::Active && csp::blocks_enable(startup.kind), "fault at startup blocks");
+  csp::note_cyclic(startup, 0x0250, 0, true);
+  expect(startup.kind == csp::FaultKind::Historical && !csp::blocks_enable(startup.kind),
+         "fault cleared without a reset");
+  expect(!csp::is_fault_reset(csp::kShutdown) && !csp::is_fault_reset(csp::kDisableVoltage),
+         "recovery does not use fault reset");
+
+  csp::FaultRecord persistent;
+  csp::note_startup(persistent, 0x0208, 0);
+  csp::note_cyclic(persistent, 0x0208, 0, true);
+  expect(persistent.kind == csp::FaultKind::Active && csp::blocks_enable(persistent.kind), "persistent fault blocks");
+  csp::note_cyclic(persistent, 0x0218, 0, true);
+  expect(csp::blocks_enable(persistent.kind), "documented fault stays blocking");
+
+  csp::FaultRecord again = startup;
+  csp::note_cyclic(again, 0x021F, 0, true);
+  expect(again.kind == csp::FaultKind::Active, "fault reappearing is active");
+  csp::note_cyclic(again, 0x0250, 0, true);
+  expect(again.kind == csp::FaultKind::Acknowledgement && csp::blocks_enable(again.kind),
+         "recovered fault still needs acknowledgement");
+  expect(!csp::acknowledge(again, 0x0218, 0, true), "acknowledgement refused while faulted");
+  expect(csp::acknowledge(again, 0x0250, 0, true), "acknowledgement after the documented no-fault state");
+  expect(!csp::blocks_enable(again.kind), "acknowledged recovery no longer blocks");
+  csp::note_cyclic(again, 0x0250, 0x2312, true);
+  expect(again.kind == csp::FaultKind::Active && !again.acknowledged, "a new error cancels acknowledgement");
+
+  csp::FaultRecord documented;
+  csp::note_startup(documented, 0x0218, 0);
+  csp::note_cyclic(documented, 0x0250, 0, true);
+  expect(documented.kind == csp::FaultKind::Acknowledgement, "startup documented fault is not historical");
+  expect(!csp::acknowledge(documented, 0x0250, 0, false), "communication interruption does not acknowledge");
+  expect(documented.kind == csp::FaultKind::Acknowledgement, "lost sample keeps the fault record");
+  csp::note_cyclic(startup, 0, 0, false);
+  expect(startup.kind == csp::FaultKind::Historical, "lost sample does not invent or erase history");
+
+  motion::GateState ack_gate = open_gate();
+  ack_gate.faulted = true;
+  ack_gate.fault_recovered = false;
+  motion::Command ack = parsed("v1 id=9 op=ackfault age_ms=0");
+  expect(!motion::admit(ack, ack_gate).accept, "active fault rejects acknowledgement");
+  ack_gate.fault_recovered = true;
+  expect(motion::admit(ack, ack_gate).accept, "recovered fault can be acknowledged");
+  ack_gate.faulted = false;
+  expect(!motion::admit(ack, ack_gate).accept, "historical fault does not need acknowledgement");
+  expect(!motion::client_loss_requires_shutdown(false, false), "communication loss while disabled stays idle");
+  expect(motion::client_loss_requires_shutdown(true, false), "communication loss while enabled shuts down");
 
   if (failures != 0) {
     std::cerr << failures << " command checks failed\n";
