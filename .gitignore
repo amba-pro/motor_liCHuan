@@ -1,0 +1,52 @@
+# Build trees and compiled objects
+/build/
+**/CMakeFiles/
+**/CMakeCache.txt
+**/cmake_install.cmake
+**/CTestTestfile.cmake
+**/Makefile
+**/compile_commands.json
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.exe
+
+# Qt generated files
+**/moc_*.cpp
+**/qrc_*.cpp
+**/ui_*.h
+*.autosave
+*.user
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# Runtime captures and logs
+*.log
+*.pcap
+*.cap
+/tmp/
+captures/
+
+# Local editor and machine state
+.idea/
+.vscode/
+*.swp
+*~
+.env
+.env.*
+
+# Secrets
+*.pem
+*.key
+id_rsa
+id_ed25519
+credentials.json
+secrets.json
