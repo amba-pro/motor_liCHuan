@@ -12,6 +12,9 @@
 #include <QFileInfo>
 #include <QProcess>
 #include <QDoubleSpinBox>
+#include <QDial>
+#include <QSlider>
+#include <cmath>
 #include <QFormLayout>
 #include <QFrame>
 #include <QGridLayout>
@@ -230,6 +233,58 @@ void MainWindow::build() {
   form->addRow("Разгон, об/мин/с", accelSpin_);
   form->addRow("Торможение, об/мин/с", decelSpin_);
   form->addRow("Рывок, об/мин/с²", jerkSpin_);
+  // Operator setpoint for a complete shaft revolution. Selection does not
+  // produce a motor command: a full-revolution planner has not been validated.
+  auto *anglePanel = new QGroupBox("Целевой угол в пределах оборота — задание", formBox);
+  auto *angleLayout = new QVBoxLayout(anglePanel);
+  auto *angleDial = new QDial(anglePanel);
+  angleDial->setObjectName("angle360Dial");
+  angleDial->setRange(0, 359);
+  angleDial->setWrapping(true);
+  angleDial->setNotchesVisible(true);
+  angleDial->setValue(0);
+  auto *angleSpin = spin(0, 359.99, 0, 2, "angle360Spin");
+  angleSpin->setSuffix("°");
+  auto *rpmSlider = new QSlider(Qt::Horizontal, anglePanel);
+  rpmSlider->setObjectName("targetRpmSlider");
+  rpmSlider->setRange(1, 50);  // 0.1–5.0 rpm, within known commissioning ceiling
+  rpmSlider->setValue(50);
+  auto *rpmLabel = new QLabel("Скорость задания: 5.0 об/мин", anglePanel);
+  rpmLabel->setObjectName("targetRpmLabel");
+  auto *targetPreview = new QLabel("Выбран угол 0°. Команда на привод не отправлена.", anglePanel);
+  targetPreview->setObjectName("targetAnglePreview");
+  targetPreview->setWordWrap(true);
+  connect(angleDial, &QDial::valueChanged, angleSpin, [angleSpin](int value) {
+    angleSpin->setValue(static_cast<double>(value));
+  });
+  connect(angleSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+          angleDial, [angleDial](double value) {
+    const int wholeDegrees = static_cast<int>(std::floor(value));
+    if (angleDial->value() != wholeDegrees) angleDial->setValue(wholeDegrees);
+  });
+  connect(angleSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+          targetPreview, [targetPreview](double angle) {
+    targetPreview->setText(QString("Выбран угол %1°. Физический поворот пока заблокирован.")
+                           .arg(angle, 0, 'f', 2));
+  });
+  connect(rpmSlider, &QSlider::valueChanged, this,
+          [this, rpmLabel](int tenths) {
+    const double rpm = tenths / 10.0;
+    speedSpin_->setValue(rpm);
+    rpmLabel->setText(QString("Скорость задания: %1 об/мин").arg(rpm, 0, 'f', 1));
+  });
+  connect(speedSpin_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+          rpmSlider, [rpmSlider](double rpm) {
+    rpmSlider->setValue(static_cast<int>(std::round(rpm * 10.0)));
+  });
+  angleLayout->addWidget(angleDial, 0, Qt::AlignHCenter);
+  angleLayout->addWidget(angleSpin);
+  angleLayout->addWidget(rpmLabel);
+  angleLayout->addWidget(rpmSlider);
+  angleLayout->addWidget(targetPreview);
+  angleLayout->addWidget(new QLabel("0–360° — выбор целевого угла, НЕ разрешённый диапазон движения. "
+                                    "До готовности CSP-контроллера пуск реального двигателя запрещён."));
+  form->addRow(anglePanel);
   motionLayout->addWidget(formBox, 1);
 
   auto *buttons = new QGroupBox("Команды");
