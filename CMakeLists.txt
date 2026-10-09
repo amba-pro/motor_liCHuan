@@ -51,6 +51,14 @@ target_link_libraries(lc_e_csp_hold PRIVATE lc_e_core)
 add_executable(lc_e_csp_enable src/lc_e_csp_enable.cpp)
 target_link_libraries(lc_e_csp_enable PRIVATE lc_e_core)
 
+add_executable(lc_e_csp_move src/lc_e_csp_move.cpp)
+target_link_libraries(lc_e_csp_move PRIVATE lc_e_core)
+
+add_executable(lc_e_trajectory_test src/lc_e_trajectory_test.cpp)
+target_include_directories(lc_e_trajectory_test PRIVATE src)
+enable_testing()
+add_test(NAME lc_e_trajectory COMMAND lc_e_trajectory_test)
+
 install(TARGETS lc_e_diag lc_e_control RUNTIME DESTINATION bin)
 
 find_package(Qt6 QUIET COMPONENTS Widgets Charts Test Network)

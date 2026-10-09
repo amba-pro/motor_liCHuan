@@ -67,7 +67,9 @@ def _segments(distance: float, velocity: float, accel: float, jerk: float) -> li
 def _position_at(segments: list[tuple[float, float]], time_s: float) -> float:
     position = velocity = acceleration = elapsed = 0.0
     for duration, jerk in segments:
-        if time_s <= elapsed + duration or duration == 0:
+        if duration == 0:
+            continue
+        if time_s <= elapsed + duration:
             dt = max(0.0, time_s - elapsed)
             return (
                 position
