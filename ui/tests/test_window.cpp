@@ -1,6 +1,8 @@
 #include "mainwindow.hpp"
 
 #include <QApplication>
+#include <QDoubleSpinBox>
+#include <QFrame>
 #include <QLabel>
 #include <QPushButton>
 #include <QTabWidget>
@@ -11,6 +13,7 @@ class WindowTest : public QObject {
 
  private slots:
   void demoWindowShowsOneRealAxisAndBlocksVelocity();
+  void safePositionPresetsOnlyUpdateTheInput();
 };
 
 void WindowTest::demoWindowShowsOneRealAxisAndBlocksVelocity() {
@@ -36,6 +39,24 @@ void WindowTest::demoWindowShowsOneRealAxisAndBlocksVelocity() {
   window.resize(1400, 900);
   QApplication::processEvents();
   QVERIFY(window.width() >= 1300);
+}
+
+void WindowTest::safePositionPresetsOnlyUpdateTheInput() {
+  MainWindow window;
+  auto *input = window.findChild<QDoubleSpinBox *>("relativeSpin");
+  auto *negative = window.findChild<QPushButton *>("preset_-0.1");
+  auto *positive = window.findChild<QPushButton *>("preset_1.0");
+  QVERIFY(input != nullptr);
+  QVERIFY(negative != nullptr);
+  QVERIFY(positive != nullptr);
+  negative->click();
+  QCOMPARE(input->value(), -0.1);
+  positive->click();
+  QCOMPARE(input->value(), 1.0);
+  auto *enable = window.findChild<QPushButton *>("realEnableButton");
+  QVERIFY(enable != nullptr);
+  QVERIFY(!window.realBlockText().isEmpty());
+  QCOMPARE(window.findChildren<QFrame *>("telemetryCard").size(), 9);
 }
 
 int main(int argc, char **argv) {
