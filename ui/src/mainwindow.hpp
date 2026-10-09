@@ -47,9 +47,19 @@ class MainWindow : public QMainWindow {
   QPushButton *diagnoseButton_ = nullptr;
   QLabel *diagnosticResult_ = nullptr;
   ChartPanel *charts_ = nullptr;
+  ChartPanel *liveCharts_ = nullptr;
   double chartTime_ = 0.0;
+  double liveTime_ = 0.0;
 
   QLabel *liveState_ = nullptr;
+  QLabel *livePosition_ = nullptr;
+  QLabel *liveVelocity_ = nullptr;
+  QLabel *liveTorque_ = nullptr;
+  QLabel *liveFollowing_ = nullptr;
+  QLabel *liveStatus_ = nullptr;
+  QLabel *liveError_ = nullptr;
+  QLabel *liveOp_ = nullptr;
+  QLabel *liveWkc_ = nullptr;
   QLabel *ethercatState_ = nullptr;
   QLabel *servoState_ = nullptr;
   QLabel *positionValue_ = nullptr;

@@ -8,9 +8,16 @@ class QValueAxis;
 
 class ChartPanel : public QWidget {
  public:
-  explicit ChartPanel(QWidget *parent = nullptr);
+  explicit ChartPanel(QWidget *parent = nullptr, bool demonstration = true);
   void append(double timeSec, double targetDeg, double actualDeg, double rpm, double followingDeg,
               double torquePercent);
+  // Live PDO charts. Velocity is omitted when the producer marks it unavailable.
+  void appendMeasured(double timeSec, double actualDeg, bool velocityKnown, double rpm, double followingDeg,
+                      double torquePercent);
+  int actualCount() const;
+  int velocityCount() const;
+  int followingCount() const;
+  int torqueCount() const;
 
  private:
   void addPoint(QLineSeries *series, QValueAxis *axisX, QValueAxis *axisY, double x, double y);

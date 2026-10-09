@@ -1,6 +1,6 @@
-# Local telemetry protocol v1 (work in progress)
+# Local telemetry protocol v1
 
-This PR adds a **read-only Qt client**, not the production EtherCAT telemetry publisher.
+The Qt client is read-only. `lc_e_csp_hold --telemetry` is the only publisher. It samples the verified TxPDO inside the existing 1 ms loop and writes JSON on another thread. `velocity_counts_s` is JSON null because 0x606C is not in that PDO.
 
 Transport: a local Unix socket exposed as Qt `QLocalServer` under name `lichuan-telemetry-v1`.
 Format: newline-delimited UTF-8 JSON, <=4096 bytes per line.
@@ -8,10 +8,10 @@ Format: newline-delimited UTF-8 JSON, <=4096 bytes per line.
 One example message:
 
 ```json
-{"schema":1,"source":"lc_e_csp_hold","position_counts":-4224994,"velocity_counts_s":0,"torque_raw":0,"following_counts":0,"statusword":545,"error_code":0,"wkc":3,"op":true,"enabled":false}
+{"schema":1,"source":"lc_e_csp_hold","position_counts":5028064,"velocity_counts_s":null,"torque_raw":0,"following_counts":0,"statusword":592,"error_code":0,"wkc":3,"op":true,"enabled":false}
 ```
 
-The example is **illustrative, not measured live data**.
+The example matches one disabled-servo OP capture (position 5028064 counts, statusword 0x0250). It is not a continuous reading.
 
 The receiver rejects missing, invalid, unknown-source or out-of-range fields and marks data stale after 500 ms without updates. Stale data are not silently re-labelled as current. All real commands from Qt stay blocked. The existing demo is not replaced or renamed as hardware.
 
@@ -37,4 +37,4 @@ ctest --test-dir build --output-on-failure
 QT_QPA_PLATFORM=offscreen build/ui/lc_motor_control --self-check
 ```
 
-A green Qt test **does not** mean live SOEM producer is implemented or connected.
+A green Qt test does not by itself show that the physical drive was in OP. Live numbers require `lc_e_csp_hold --telemetry` and a fresh frame.
